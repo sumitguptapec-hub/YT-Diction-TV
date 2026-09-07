@@ -48,7 +48,7 @@ export function signIn() {
         reject(new Error(response.error));
         return;
       }
-      sessionStorage.setItem(TOKEN_STORAGE_KEY, response.access_token);
+      localStorage.setItem(TOKEN_STORAGE_KEY, response.access_token);
       resolve(response.access_token);
     };
     tokenClient.requestAccessToken({ prompt: "" });
@@ -67,18 +67,19 @@ export function completeRedirectSignIn() {
   history.replaceState(null, "", window.location.pathname + window.location.search);
   const token = params.get("access_token");
   if (!token) return { success: false, error: params.get("error") || "no token returned" };
-  sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+  localStorage.setItem(TOKEN_STORAGE_KEY, token);
   return { success: true };
 }
 
 // Access tokens from this flow are short-lived (about an hour) and there's
-// no refresh token in this browser-only flow -- sessionStorage just avoids
-// re-prompting on a page reload within that window; expect an occasional
-// re-sign-in.
+// no refresh token in this browser-only flow. localStorage (rather than
+// sessionStorage) means being closed and reopened -- including force-quit
+// on iOS -- doesn't force a fresh sign-in on its own; only actual token
+// expiry does, roughly once an hour.
 export function getStoredToken() {
-  return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+  return localStorage.getItem(TOKEN_STORAGE_KEY);
 }
 
 export function clearStoredToken() {
-  sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
 }

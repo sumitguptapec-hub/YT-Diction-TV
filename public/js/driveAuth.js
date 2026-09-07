@@ -45,7 +45,7 @@ export function signInToDrive() {
         reject(new Error(`${response.error}: ${response.error_description ?? ""}`));
         return;
       }
-      sessionStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, response.access_token);
+      localStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, response.access_token);
       resolve(response.access_token);
     };
     driveTokenClient.requestAccessToken({ prompt: "" });
@@ -53,7 +53,7 @@ export function signInToDrive() {
 }
 
 export function getStoredDriveToken() {
-  return sessionStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
+  return localStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
 }
 
 // Boot-time counterpart to auth.js's completeRedirectSignIn() -- see that
@@ -66,6 +66,6 @@ export function completeDriveRedirectSignIn() {
   history.replaceState(null, "", window.location.pathname + window.location.search);
   const token = params.get("access_token");
   if (!token) return { success: false, error: params.get("error") || "no token returned" };
-  sessionStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, token);
+  localStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, token);
   return { success: true };
 }
