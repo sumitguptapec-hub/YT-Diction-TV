@@ -5,12 +5,17 @@ a video a few caption lines (or seconds) at a time, auto-pausing between
 slots. Works in any modern browser, including Safari on iPhone/iPad.
 
 Feature parity with the Android app: YouTube search + sign-in, dictation-pace
-playback, subtitle overlay driven by real captions, History/Favorites,
-settings for lines-per-slot/seconds/mode/subtitle color/position/two-line
-toggle/speed. Not included (deliberately, see the main conversation this was
-built in): USB/local file browsing (no equivalent on web) and Google Drive
-(the same Google-account-level OAuth block hit on the Android app would very
-likely affect this too).
+playback with a circular progress ring, subtitle overlay driven by real
+captions, History/Favorites, settings for lines-per-slot/seconds/mode/
+subtitle color/position/two-line toggle/speed, local video file playback
+(pick a file from your device instead of browsing a USB drive -- a browser
+can't do the latter, but can do the former), and Google Drive browsing +
+playback.
+
+Not included: physical remote-control key mapping obviously doesn't apply to
+touch/keyboard -- replaced with on-screen buttons and keyboard shortcuts
+(Space/Enter = next slot, arrow keys = prev/next slot and 10s seek, C =
+toggle info panel).
 
 ## How it's built
 
@@ -140,18 +145,40 @@ Then open http://localhost:3000. Sign-in will only work once
 `http://localhost:3000` is added to the OAuth client's authorized origins
 (step 1.6 above).
 
+## Google Drive: worth testing here even though Android couldn't
+
+The Android app hit an unresolved, account-level Google OAuth restriction
+blocking `drive.readonly` for every client/project it tried (both the old
+`GoogleSignInClient` API and the newer `AuthorizationClient` API) -- see the
+support case draft in the parent folder. This web app requests Drive access
+through yet another, completely different mechanism (Google Identity
+Services' browser token-client flow), requested lazily the first time you
+tap the ☁ icon rather than bundled into sign-in. It's genuinely unknown
+whether the same account-level block applies here too -- this hasn't been
+testable from this environment (the OAuth consent popup can't be driven
+through browser automation the way most of the rest of this was verified).
+**Try it on the real deployed site and tell me what happens** -- either it
+works (in which case the block really was specific to Android's native SDKs)
+or it fails with the same "not permitted to request scopes" error (in which
+case it's confirmed universal, useful to add to the support case).
+
+Drive video playback here works by downloading the full file into memory
+before playing (like local file playback) rather than true streaming --
+fine for typical video sizes, but there's no seeking within the video until
+it's fully downloaded, and very large files will be slow to start and
+memory-heavy. Worth revisiting with a proper streaming approach if Drive
+turns out to work at all.
+
 ## Known limitations vs. the Android app
 
-- **Drive**: not implemented. The Android app hit an unresolved,
-  account-level Google OAuth restriction blocking `drive.readonly` for any
-  client/project -- see the support case draft in the parent folder. A web
-  OAuth client might behave differently (different auth flow entirely), but
-  it wasn't tested here to avoid repeating the same multi-hour investigation
-  before knowing whether it's worth it.
 - **Remote-control key mapping** (Channel Up/Down, colour buttons, numeric
   keypad) doesn't apply to a touch/keyboard device -- replaced with on-screen
   buttons plus keyboard shortcuts (Space/Enter = next slot, arrow keys =
   prev/next slot and 10s seek, C = toggle info panel).
 - **Access tokens expire after about an hour** with no silent refresh (this
   flow doesn't get a refresh token) -- expect an occasional re-sign-in
-  compared to the Android app's longer-lived session.
+  compared to the Android app's longer-lived session. This applies
+  separately to the YouTube and Drive tokens.
+- **Local/Drive video History and Favorites**: not tracked, same as the
+  Android app's local-video handling -- no stable identity to key them off
+  across sessions.

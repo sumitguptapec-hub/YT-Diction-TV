@@ -24,11 +24,14 @@
     <header class="search-header">
       <div class="brand"><span class="accent">YT</span> DICTATION</div>
       <div class="header-icons">
+        <button id="btn-local-video" class="icon-btn" title="Play a local video file">💾</button>
+        <button id="btn-drive" class="icon-btn" title="Google Drive">☁</button>
         <button id="btn-history" class="icon-btn" title="History">🕘</button>
         <button id="btn-favorites" class="icon-btn" title="Favorites">♥</button>
         <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
       </div>
     </header>
+    <input type="file" id="local-file-input" accept="video/*,.srt" multiple hidden />
     <form id="search-form" class="search-bar">
       <input id="search-input" type="search" placeholder="Search for a video..." autocomplete="off" />
       <button type="submit" class="btn btn-primary">Search</button>
@@ -51,6 +54,16 @@
       <h2>Favorites</h2>
     </header>
     <div id="favorites-list" class="list"></div>
+  </section>
+
+  <section id="screen-drive" class="screen hidden">
+    <header class="subpage-header">
+      <button class="icon-btn" id="btn-drive-back">←</button>
+      <h2>Google Drive</h2>
+      <span id="drive-folder-name" class="muted"></span>
+    </header>
+    <p id="drive-status" class="muted"></p>
+    <div id="drive-grid" class="grid"></div>
   </section>
 
   <section id="screen-settings" class="screen hidden">
@@ -111,12 +124,19 @@
   </section>
 
   <section id="screen-player" class="screen hidden">
-    <div id="player-container"><div id="yt-player"></div></div>
+    <div id="player-container">
+      <div id="yt-player"></div>
+      <video id="local-video-player" class="hidden" playsinline></video>
+    </div>
     <div id="subtitle-box" class="subtitle-box hidden">
       <div id="subtitle-text"></div>
       <div id="subtitle-next"></div>
     </div>
     <div id="hud" class="hud hidden"></div>
+    <svg id="progress-ring" class="progress-ring hidden" viewBox="0 0 44 44">
+      <circle class="progress-ring-track" cx="22" cy="22" r="18"></circle>
+      <circle id="progress-ring-fill" class="progress-ring-fill" cx="22" cy="22" r="18"></circle>
+    </svg>
     <button id="resume-pill" class="resume-pill hidden">▶ Resume</button>
     <div id="timeline" class="timeline hidden">
       <div class="timeline-track"><div id="timeline-fill" class="timeline-fill"></div></div>
