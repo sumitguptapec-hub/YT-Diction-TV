@@ -20,6 +20,8 @@ let slotController = null;
 let ytPlayer = null;
 let pollTimer = null;
 let localVideoObjectUrl = null;
+let remotePollTimer = null;
+let remoteLastSeenAt = 0;
 
 // Polling instead of relying on window.onYouTubeIframeAPIReady: that global
 // callback races against this being a deferred module script -- on-device
@@ -358,6 +360,7 @@ function openVideo(video) {
     },
     onChange: render,
   });
+  startRemotePolling();
 
   const load = () => {
     ytPlayer = new YT.Player("yt-player", {
@@ -421,6 +424,7 @@ function playBlobAsVideo(blob, { title, subtitle }) {
     onPositionSave: () => {}, // no persistent identity to save against
     onChange: render,
   });
+  startRemotePolling();
 
   localVideoObjectUrl = URL.createObjectURL(blob);
   videoEl.src = localVideoObjectUrl;
@@ -498,8 +502,43 @@ function stopPolling() {
   pollTimer = null;
 }
 
+// Lets an iPhone Action Button (via a Shortcut hitting api/remote.js) drive
+// next/previous slot without touching the screen -- see that file's
+// comment for why polling is needed instead of a direct signal. Baselines
+// against whatever command is already stored before acting on anything, so
+// a stale press from before this video was even opened doesn't fire the
+// instant playback starts.
+async function startRemotePolling() {
+  stopRemotePolling();
+  try {
+    const initial = await fetch("/api/remote").then((r) => r.json());
+    remoteLastSeenAt = initial?.at ?? 0;
+  } catch {
+    remoteLastSeenAt = 0;
+  }
+  remotePollTimer = setInterval(async () => {
+    if (!slotController) return;
+    try {
+      const command = await fetch("/api/remote").then((r) => r.json());
+      if (command && command.at > remoteLastSeenAt) {
+        remoteLastSeenAt = command.at;
+        if (command.action === "prev") slotController.channelDown();
+        else slotController.channelUp();
+      }
+    } catch {
+      // transient network hiccup -- next tick tries again
+    }
+  }, 1500);
+}
+
+function stopRemotePolling() {
+  if (remotePollTimer) clearInterval(remotePollTimer);
+  remotePollTimer = null;
+}
+
 function destroyPlayer() {
   stopPolling();
+  stopRemotePolling();
   slotController?.flushPosition();
   if (ytPlayer) {
     try { ytPlayer.destroy(); } catch {}
