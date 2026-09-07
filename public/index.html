@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>YT Dictation</title>
+<link rel="stylesheet" href="style.css" />
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</head>
+<body>
+<div id="app">
+
+  <section id="screen-signin" class="screen">
+    <div class="centerbox">
+      <h1><span class="accent">YT</span> DICTATION</h1>
+      <p class="muted">Search YouTube, then watch it a few lines at a time.</p>
+      <button id="btn-signin" class="btn btn-primary">Sign in with Google</button>
+      <p id="signin-error" class="error"></p>
+    </div>
+  </section>
+
+  <section id="screen-search" class="screen hidden">
+    <header class="search-header">
+      <div class="brand"><span class="accent">YT</span> DICTATION</div>
+      <div class="header-icons">
+        <button id="btn-history" class="icon-btn" title="History">🕘</button>
+        <button id="btn-favorites" class="icon-btn" title="Favorites">♥</button>
+        <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
+      </div>
+    </header>
+    <form id="search-form" class="search-bar">
+      <input id="search-input" type="search" placeholder="Search for a video..." autocomplete="off" />
+      <button type="submit" class="btn btn-primary">Search</button>
+    </form>
+    <p id="search-status" class="muted"></p>
+    <div id="search-results" class="grid"></div>
+  </section>
+
+  <section id="screen-history" class="screen hidden">
+    <header class="subpage-header">
+      <button class="icon-btn" data-back>←</button>
+      <h2>History</h2>
+    </header>
+    <div id="history-list" class="list"></div>
+  </section>
+
+  <section id="screen-favorites" class="screen hidden">
+    <header class="subpage-header">
+      <button class="icon-btn" data-back>←</button>
+      <h2>Favorites</h2>
+    </header>
+    <div id="favorites-list" class="list"></div>
+  </section>
+
+  <section id="screen-settings" class="screen hidden">
+    <header class="subpage-header">
+      <button class="icon-btn" data-back>←</button>
+      <h2>Settings</h2>
+    </header>
+    <div class="settings-body">
+      <div class="setting-row">
+        <label>Lines per slot</label>
+        <div class="stepper">
+          <button data-step="linesPerSlot" data-delta="-1">−</button>
+          <span id="val-linesPerSlot"></span>
+          <button data-step="linesPerSlot" data-delta="1">+</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Seconds per slot</label>
+        <div class="stepper">
+          <button data-step="slotSeconds" data-delta="-5">−</button>
+          <span id="val-slotSeconds"></span>
+          <button data-step="slotSeconds" data-delta="5">+</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Pacing mode</label>
+        <div class="segmented" id="mode-selector">
+          <button data-mode="linesOnly">Lines only</button>
+          <button data-mode="both">Both</button>
+          <button data-mode="timeOnly">Time only</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Subtitle position</label>
+        <div class="segmented" id="position-selector">
+          <button data-position="top">Top</button>
+          <button data-position="bottom">Bottom</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Subtitle color</label>
+        <input type="color" id="subtitle-color-input" />
+      </div>
+      <div class="setting-row">
+        <label>Show next line</label>
+        <input type="checkbox" id="two-lines-toggle" />
+      </div>
+      <div class="setting-row">
+        <label>Playback speed</label>
+        <div class="stepper">
+          <button id="speed-down">−</button>
+          <span id="val-speed"></span>
+          <button id="speed-up">+</button>
+        </div>
+      </div>
+      <button id="btn-signout" class="btn">Sign out</button>
+    </div>
+  </section>
+
+  <section id="screen-player" class="screen hidden">
+    <div id="player-container"><div id="yt-player"></div></div>
+    <div id="subtitle-box" class="subtitle-box hidden">
+      <div id="subtitle-text"></div>
+      <div id="subtitle-next"></div>
+    </div>
+    <div id="hud" class="hud hidden"></div>
+    <button id="resume-pill" class="resume-pill hidden">▶ Resume</button>
+    <div id="timeline" class="timeline hidden">
+      <div class="timeline-track"><div id="timeline-fill" class="timeline-fill"></div></div>
+      <div class="timeline-times"><span id="time-current"></span><span id="time-duration"></span></div>
+    </div>
+    <div id="player-overlay" class="player-overlay hidden">
+      <div class="overlay-title-row">
+        <div class="overlay-title" id="overlay-title"></div>
+        <button id="btn-favorite" class="icon-btn">♡</button>
+      </div>
+      <div class="overlay-channel" id="overlay-channel"></div>
+      <div class="overlay-slot-info" id="overlay-slot-info"></div>
+      <div class="overlay-controls">
+        <label>Lines/slot</label>
+        <button data-step="linesPerSlot" data-delta="-1">−</button>
+        <span id="live-linesPerSlot"></span>
+        <button data-step="linesPerSlot" data-delta="1">+</button>
+        <label>Secs</label>
+        <button data-step="slotSeconds" data-delta="-5">−</button>
+        <span id="live-slotSeconds"></span>
+        <button data-step="slotSeconds" data-delta="5">+</button>
+        <label>Speed</label>
+        <button id="live-speed-down">−</button>
+        <span id="live-speed"></span>
+        <button id="live-speed-up">+</button>
+      </div>
+      <p class="muted small">Space/Enter: next slot &middot; ←/→ seek 10s &middot; ↑/↓ prev/next slot &middot; C: toggle this panel</p>
+    </div>
+    <div id="player-controls" class="player-controls">
+      <button id="btn-player-back" class="icon-btn" title="Back">✕</button>
+      <button id="btn-prev-slot" class="icon-btn" title="Previous slot">⏮</button>
+      <button id="btn-play-pause" class="icon-btn" title="Play/Pause">⏯</button>
+      <button id="btn-next-slot" class="icon-btn" title="Next slot">⏭</button>
+      <button id="btn-toggle-overlay" class="icon-btn" title="Info panel">☰</button>
+    </div>
+  </section>
+
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
