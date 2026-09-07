@@ -513,7 +513,8 @@ async function startRemotePolling() {
   try {
     const initial = await fetch("/api/remote").then((r) => r.json());
     remoteLastSeenAt = initial?.at ?? 0;
-  } catch {
+  } catch (err) {
+    console.error("Remote polling: initial baseline fetch failed", err);
     remoteLastSeenAt = 0;
   }
   remotePollTimer = setInterval(async () => {
@@ -525,8 +526,8 @@ async function startRemotePolling() {
         if (command.action === "prev") slotController.channelDown();
         else slotController.channelUp();
       }
-    } catch {
-      // transient network hiccup -- next tick tries again
+    } catch (err) {
+      console.error("Remote polling: poll failed", err);
     }
   }, 1500);
 }
