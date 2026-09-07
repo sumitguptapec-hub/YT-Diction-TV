@@ -208,13 +208,41 @@ function renderDriveGrid(entries) {
   }
 }
 
+// Drive videos have to be downloaded in full before they can play (see
+// README) -- a large file can take a while, and res.blob() gives no
+// feedback during that wait, which looks exactly like a hang. Reading the
+// stream by hand lets the status line show real download progress instead.
+async function fetchBlobWithProgress(url, options, onProgress) {
+  const res = await fetch(url, options);
+  if (!res.ok) throw new Error(`download failed: ${res.status}`);
+  const total = parseInt(res.headers.get("Content-Length") || "0", 10);
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    onProgress(received, total);
+  }
+  return new Blob(chunks);
+}
+
 async function openDriveVideo(entry) {
   const token = getStoredDriveToken();
-  el("drive-status").textContent = "Loading video…";
+  el("drive-status").textContent = "Downloading video…";
   try {
-    const res = await fetch(driveApi.mediaUrl(entry.id), { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error(`download failed: ${res.status}`);
-    const blob = await res.blob();
+    const blob = await fetchBlobWithProgress(
+      driveApi.mediaUrl(entry.id),
+      { headers: { Authorization: `Bearer ${token}` } },
+      (received, total) => {
+        const mb = (received / 1048576).toFixed(1);
+        el("drive-status").textContent = total
+          ? `Downloading video… ${Math.round((received / total) * 100)}% (${mb} MB)`
+          : `Downloading video… ${mb} MB`;
+      }
+    );
     el("drive-status").textContent = "";
     const ctrl = playBlobAsVideo(blob, { title: entry.name, subtitle: "Google Drive" });
     if (entry.srtFileId) {
