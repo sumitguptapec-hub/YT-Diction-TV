@@ -550,7 +550,7 @@ async function startRemotePolling() {
     } catch (err) {
       console.error("Remote polling: poll failed", err);
     }
-  }, 1500);
+  }, 1000);
 }
 
 function stopRemotePolling() {
