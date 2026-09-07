@@ -108,6 +108,10 @@
         <input type="color" id="subtitle-color-input" />
       </div>
       <div class="setting-row">
+        <label>Subtitle highlight</label>
+        <input type="color" id="subtitle-highlight-input" />
+      </div>
+      <div class="setting-row">
         <label>Show next line</label>
         <input type="checkbox" id="two-lines-toggle" />
       </div>
@@ -125,8 +129,10 @@
 
   <section id="screen-player" class="screen hidden">
     <div id="player-container">
-      <div id="yt-player"></div>
-      <video id="local-video-player" class="hidden" playsinline></video>
+      <div id="yt-player-wrapper"><div id="yt-player"></div></div>
+      <video id="local-video-player" class="hidden" playsinline autopictureinpicture></video>
+      <div id="float-drag-handle" class="hidden"></div>
+      <div id="float-resize-handle" class="hidden"></div>
     </div>
     <div id="subtitle-box" class="subtitle-box hidden">
       <div id="subtitle-text"></div>
@@ -138,6 +144,7 @@
       <circle id="progress-ring-fill" class="progress-ring-fill" cx="22" cy="22" r="18"></circle>
     </svg>
     <button id="resume-pill" class="resume-pill hidden">▶ Resume</button>
+    <div id="liked-badge" class="hidden" title="Liked -- drag to move">❤️</div>
     <div id="timeline" class="timeline hidden">
       <div class="timeline-track"><div id="timeline-fill" class="timeline-fill"></div></div>
       <div class="timeline-times"><span id="time-current"></span><span id="time-duration"></span></div>
@@ -171,6 +178,17 @@
       <button id="btn-play-pause" class="icon-btn" title="Play/Pause">⏯</button>
       <button id="btn-next-slot" class="icon-btn" title="Next slot">⏭</button>
       <button id="btn-toggle-overlay" class="icon-btn" title="Info panel">☰</button>
+      <button id="btn-toggle-float" class="icon-btn" title="Move &amp; resize video">⛶</button>
+      <button id="btn-lock-screen" class="icon-btn" title="Lock screen">🔒</button>
+      <button id="btn-screen-off" class="icon-btn" title="Audio only (screen off)">🌑</button>
+    </div>
+    <div id="screen-off-overlay" class="hidden">
+      <button id="screen-off-playpause">▶</button>
+      <div id="screen-off-hint">Tap anywhere else to show the video again</div>
+    </div>
+    <div id="lock-overlay" class="hidden">
+      <div id="lock-hint">Locked -- swipe up from here, or double-tap 🔒</div>
+      <button id="lock-icon">🔒</button>
     </div>
   </section>
 

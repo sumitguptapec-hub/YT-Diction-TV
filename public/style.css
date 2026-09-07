@@ -143,8 +143,67 @@ html, body {
 
 #screen-player { padding: 0; position: relative; background: #000; }
 #player-container { position: relative; width: 100%; height: 100dvh; background: #000; }
-#yt-player, #player-container iframe { width: 100% !important; height: 100% !important; }
-#local-video-player { width: 100%; height: 100%; object-fit: contain; background: #000; }
+/* Sized precisely to the video's real aspect-fitted rect by
+   layoutVideoAndSubtitles() in app.js, rather than stretched to fill the
+   whole container -- that's what makes any letterboxed/pillarboxed space
+   real, known area the subtitle box can use instead of overlaying the
+   picture. #yt-player-wrapper (not #yt-player) is the sizing target
+   because YT.Player replaces the #yt-player div with an <iframe> that
+   reuses its id -- a stable wrapper is needed so JS always has the same
+   element to position, whether or not the player has loaded yet. */
+#yt-player-wrapper, #local-video-player { position: absolute; background: #000; }
+#yt-player-wrapper iframe { width: 100% !important; height: 100% !important; }
+#local-video-player { object-fit: contain; }
+
+/* Floating mode: the video shrinks into a small movable/resizable box while
+   the subtitle overlay, HUD, and controls stay in their normal full-screen
+   positions -- only the video itself relocates. A YouTube iframe is a
+   separate browsing context, so touches landing on it never reach this
+   page's own pointer listeners; #float-drag-handle is a real, always-on-top
+   strip specifically so dragging still works over a YouTube video, not just
+   local/Drive <video> playback. */
+#player-container.floating {
+  position: fixed;
+  z-index: 40;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.6);
+}
+#float-drag-handle {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 24px;
+  z-index: 2;
+  background: rgba(0,0,0,0.55);
+  touch-action: none;
+  cursor: grab;
+}
+#float-drag-handle:active { cursor: grabbing; }
+#float-drag-handle::after {
+  content: "\2807\2807\2807";
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  letter-spacing: 3px;
+  color: rgba(255,255,255,0.6);
+  font-size: 12px;
+}
+#float-resize-handle {
+  position: absolute;
+  right: 0; bottom: 0;
+  width: 26px; height: 26px;
+  z-index: 2;
+  background: rgba(255,255,255,0.85);
+  border-top-left-radius: 8px;
+  touch-action: none;
+  cursor: nwse-resize;
+}
+#float-resize-handle::after {
+  content: "";
+  position: absolute; right: 6px; bottom: 6px;
+  width: 10px; height: 10px;
+  border-right: 2px solid #333;
+  border-bottom: 2px solid #333;
+}
 
 .subtitle-box {
   position: absolute;
@@ -155,6 +214,17 @@ html, body {
 }
 .subtitle-box.pos-top { top: 6%; }
 .subtitle-box.pos-bottom { bottom: 14%; }
+/* Applied by layoutVideoAndSubtitles() when there's real empty space next
+   to the video (e.g. a 16:9 video in a taller-than-16:9 viewport) -- uses
+   the full width of that space instead of the narrower 6%-margin overlay
+   above, and top/height come from JS as exact pixel bands. */
+.subtitle-box.in-deadspace {
+  left: 0; right: 0; bottom: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
 .subtitle-box .bubble {
   display: inline-block;
   background: rgba(0,0,0,0.55);
@@ -207,6 +277,21 @@ html, body {
   padding: 12px 20px;
   font-weight: 700;
   cursor: pointer;
+  touch-action: none;
+}
+
+/* Draggable/relocatable and remembered across videos, same idea as the
+   resume pill -- shown whenever the current video is liked, independent of
+   the info-panel's own heart toggle button, which stays hidden along with
+   the rest of the overlay when it's closed. */
+#liked-badge {
+  position: absolute;
+  right: 20px; top: 20px;
+  font-size: 28px;
+  z-index: 45;
+  touch-action: none;
+  cursor: grab;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.7));
 }
 
 .timeline {
@@ -244,4 +329,68 @@ html, body {
 @media (max-width: 480px) {
   .screen { padding: 16px; }
   .overlay-controls { gap: 6px; }
+}
+
+/* Blacks out the picture while playback keeps running underneath (audio
+   keeps playing) -- a purely visual toggle, not the OS-level background
+   playback the lock/side-button case needs, which is a separate, much more
+   limited thing (see the autopictureinpicture attribute on the local video
+   element instead). Sits below the lock overlay (z-index 60) so locking
+   still works while in this mode. */
+#screen-off-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+#screen-off-playpause {
+  width: 84px; height: 84px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  font-size: 34px;
+  cursor: pointer;
+}
+#screen-off-hint {
+  color: rgba(255,255,255,0.5);
+  font-size: 12px;
+}
+
+/* Sits on top of everything (including the floating video, z-index 40) so
+   it can absorb every touch -- transparent rather than dimmed, since the
+   point is to stop accidental taps while still watching, not to hide the
+   picture. */
+#lock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  touch-action: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-bottom: 36px;
+}
+#lock-hint {
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+}
+#lock-icon {
+  background: rgba(0,0,0,0.55);
+  border: none;
+  border-radius: 50%;
+  width: 50px; height: 50px;
+  font-size: 22px;
+  color: #fff;
+  cursor: pointer;
 }

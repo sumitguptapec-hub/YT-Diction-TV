@@ -49,6 +49,12 @@ export const settings = {
   set subtitleColor(v) {
     writeJson("subtitleColor", v);
   },
+  get subtitleHighlightColor() {
+    return readJson("subtitleHighlightColor", "#000000");
+  },
+  set subtitleHighlightColor(v) {
+    writeJson("subtitleHighlightColor", v);
+  },
   get subtitleTwoLines() {
     return readJson("subtitleTwoLines", false);
   },
@@ -70,6 +76,32 @@ export const settings = {
   },
   set driveLastPath(v) {
     writeJson("driveLastPath", v);
+  },
+  // Floating/movable video mode -- remembered across videos and sessions so
+  // it doesn't need re-enabling and re-positioning every time.
+  get floatingEnabled() {
+    return readJson("floatingEnabled", false);
+  },
+  set floatingEnabled(v) {
+    writeJson("floatingEnabled", v);
+  },
+  get floatBox() {
+    return readJson("floatBox", null); // {left, top, width} in px, or null before it's ever been positioned
+  },
+  set floatBox(v) {
+    writeJson("floatBox", v);
+  },
+  get resumePillPos() {
+    return readJson("resumePillPos", null); // {left, top} in px, or null to use the default corner position
+  },
+  set resumePillPos(v) {
+    writeJson("resumePillPos", v);
+  },
+  get likedBadgePos() {
+    return readJson("likedBadgePos", null); // {left, top} in px, or null to use the default corner position
+  },
+  set likedBadgePos(v) {
+    writeJson("likedBadgePos", v);
   },
 };
 

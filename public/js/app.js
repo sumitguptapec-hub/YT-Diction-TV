@@ -14,6 +14,7 @@ const state = {
   searchResults: [],
   currentVideo: null, // { videoId, title, channelTitle, thumbnailUrl }
   resumePositionSec: 0,
+  floatAspect: 16 / 9,
 };
 
 let slotController = null;
@@ -22,6 +23,7 @@ let pollTimer = null;
 let localVideoObjectUrl = null;
 let remotePollTimer = null;
 let remoteLastSeenAt = 0;
+let floatDrag = null; // {mode: "move"|"resize", startX, startY, startLeft, startTop, startWidth}
 
 // Polling instead of relying on window.onYouTubeIframeAPIReady: that global
 // callback races against this being a deferred module script -- on-device
@@ -265,6 +267,7 @@ function syncSettingsUi() {
   el("val-slotSeconds").textContent = storage.settings.slotSeconds + "s";
   el("val-speed").textContent = formatSpeed(storage.settings.playbackSpeed);
   el("subtitle-color-input").value = storage.settings.subtitleColor;
+  el("subtitle-highlight-input").value = storage.settings.subtitleHighlightColor;
   el("two-lines-toggle").checked = storage.settings.subtitleTwoLines;
   setActiveSegment("mode-selector", "mode", storage.settings.slotMode);
   setActiveSegment("position-selector", "position", storage.settings.subtitlePosition);
@@ -305,9 +308,14 @@ el("position-selector").addEventListener("click", (e) => {
   storage.settings.subtitlePosition = btn.dataset.position;
   syncSettingsUi();
   render();
+  if (slotController) layoutVideoAndSubtitles();
 });
 el("subtitle-color-input").addEventListener("input", (e) => {
   storage.settings.subtitleColor = e.target.value;
+  render();
+});
+el("subtitle-highlight-input").addEventListener("input", (e) => {
+  storage.settings.subtitleHighlightColor = e.target.value;
   render();
 });
 el("two-lines-toggle").addEventListener("change", (e) => {
@@ -345,10 +353,15 @@ function openVideo(video) {
   el("overlay-channel").textContent = video.channelTitle;
   el("btn-favorite").classList.remove("hidden");
   el("btn-favorite").textContent = storage.isFavorite(video.videoId) ? "♥" : "♡";
+  state.floatAspect = 16 / 9; // YouTube's embed is always 16:9
+  applyFloatingLayout();
+  applyResumePillPosition();
+  applyLikedBadgePosition();
+  updateLikedBadge();
 
   destroyPlayer(); // replaces both player elements with fresh nodes -- must happen before the visibility toggles below
 
-  el("yt-player").classList.remove("hidden");
+  el("yt-player-wrapper").classList.remove("hidden");
   el("local-video-player").classList.add("hidden");
 
   slotController = new SlotController({
@@ -411,12 +424,16 @@ function playBlobAsVideo(blob, { title, subtitle }) {
   el("overlay-title").textContent = title;
   el("overlay-channel").textContent = subtitle;
   el("btn-favorite").classList.add("hidden");
+  updateLikedBadge(); // hides it -- local/Drive video has no favorite identity to check
+  state.floatAspect = 16 / 9; // corrected below once the file's real dimensions are known
 
   destroyPlayer(); // replaces #local-video-player with a fresh node -- must happen before grabbing videoEl below
 
-  el("yt-player").classList.add("hidden");
+  el("yt-player-wrapper").classList.add("hidden");
   const videoEl = el("local-video-player");
   videoEl.classList.remove("hidden");
+  applyFloatingLayout(); // after destroyPlayer(), which would otherwise wipe out the sizing this sets on local-video-player
+  applyResumePillPosition();
 
   slotController = new SlotController({
     currentConfig,
@@ -432,6 +449,10 @@ function playBlobAsVideo(blob, { title, subtitle }) {
 
   videoEl.addEventListener("loadedmetadata", () => {
     slotController?.onDuration(videoEl.duration);
+    if (videoEl.videoWidth && videoEl.videoHeight) {
+      state.floatAspect = videoEl.videoWidth / videoEl.videoHeight;
+      layoutVideoAndSubtitles(); // corrects the fit now that the file's real aspect ratio (not the 16:9 default) is known
+    }
     videoEl.play();
   });
   videoEl.addEventListener("timeupdate", () => slotController?.onSecond(videoEl.currentTime));
@@ -560,6 +581,226 @@ function destroyPlayer() {
   }
 }
 
+// ---------- Floating video ----------
+
+function currentFloatAspect() {
+  return state.floatAspect || 16 / 9;
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+// Applies (or removes) the floating box's position/size from storage, so a
+// previously-enabled float mode resumes automatically on the next video
+// instead of needing to be turned back on and re-positioned every time.
+function applyFloatingLayout() {
+  const container = el("player-container");
+  const enabled = storage.settings.floatingEnabled;
+  container.classList.toggle("floating", enabled);
+  el("float-drag-handle").classList.toggle("hidden", !enabled);
+  el("float-resize-handle").classList.toggle("hidden", !enabled);
+  if (!enabled) {
+    container.style.left = "";
+    container.style.top = "";
+    container.style.width = "";
+    container.style.height = "";
+  } else {
+    const aspect = currentFloatAspect();
+    const saved = storage.settings.floatBox;
+    const width = clamp(saved?.width ?? Math.min(240, window.innerWidth - 24), 100, window.innerWidth - 8);
+    const height = width / aspect;
+    const left = clamp(saved?.left ?? window.innerWidth - width - 12, 0, Math.max(0, window.innerWidth - width));
+    const top = clamp(saved?.top ?? 80, 0, Math.max(0, window.innerHeight - height));
+    container.style.width = `${width}px`;
+    container.style.height = `${height}px`;
+    container.style.left = `${left}px`;
+    container.style.top = `${top}px`;
+  }
+  layoutVideoAndSubtitles();
+}
+
+// Sizes the actual video content (not just its container) to a true
+// aspect-fitted rect, and moves the subtitle box into any real dead space
+// next to it (full width) instead of overlaying the picture, whenever
+// there's enough of it to be worth using -- e.g. a 16:9 video in a taller
+// portrait viewport, or a shrunk floating box. Falls back to the normal
+// overlay (.pos-top/.pos-bottom) when the video already fills the
+// container in that dimension, so nothing changes for a landscape video
+// filling a landscape screen. Runs after any container size/position
+// change, or the video's aspect ratio becoming known.
+function layoutVideoAndSubtitles() {
+  const container = el("player-container");
+  const cw = container.clientWidth;
+  const ch = container.clientHeight;
+  if (!cw || !ch) return;
+  const aspect = currentFloatAspect();
+
+  let vw, vh;
+  if (cw / ch > aspect) {
+    vh = ch;
+    vw = vh * aspect;
+  } else {
+    vw = cw;
+    vh = vw / aspect;
+  }
+  const vx = (cw - vw) / 2;
+  const vy = (ch - vh) / 2;
+
+  for (const id of ["yt-player-wrapper", "local-video-player"]) {
+    const videoEl = el(id);
+    videoEl.style.left = `${vx}px`;
+    videoEl.style.top = `${vy}px`;
+    videoEl.style.width = `${vw}px`;
+    videoEl.style.height = `${vh}px`;
+  }
+
+  const MIN_DEADSPACE = 44; // px -- below this it's not worth relocating subtitles into
+  const spaceBelow = ch - (vy + vh);
+  const spaceAbove = vy;
+  const pos = storage.settings.subtitlePosition;
+  const subtitleBox = el("subtitle-box");
+  if (pos === "bottom" && spaceBelow >= MIN_DEADSPACE) {
+    subtitleBox.classList.add("in-deadspace");
+    subtitleBox.style.top = `${vy + vh}px`;
+    subtitleBox.style.height = `${spaceBelow}px`;
+  } else if (pos === "top" && spaceAbove >= MIN_DEADSPACE) {
+    subtitleBox.classList.add("in-deadspace");
+    subtitleBox.style.top = "0px";
+    subtitleBox.style.height = `${spaceAbove}px`;
+  } else {
+    subtitleBox.classList.remove("in-deadspace");
+    subtitleBox.style.top = "";
+    subtitleBox.style.height = "";
+  }
+}
+
+el("btn-toggle-float").addEventListener("click", () => {
+  storage.settings.floatingEnabled = !storage.settings.floatingEnabled;
+  applyFloatingLayout();
+});
+
+// Dragging/resizing happens via two small dedicated handle elements rather
+// than the video body itself -- a YouTube embed is a cross-origin iframe,
+// and touches landing on it never reach this page's own pointer listeners,
+// so grabbing the video directly wouldn't work for YouTube playback at all.
+el("float-drag-handle").addEventListener("pointerdown", (e) => {
+  const rect = el("player-container").getBoundingClientRect();
+  floatDrag = { mode: "move", startX: e.clientX, startY: e.clientY, startLeft: rect.left, startTop: rect.top };
+});
+
+el("float-resize-handle").addEventListener("pointerdown", (e) => {
+  const rect = el("player-container").getBoundingClientRect();
+  floatDrag = { mode: "resize", startX: e.clientX, startY: e.clientY, startWidth: rect.width };
+});
+
+window.addEventListener("pointermove", (e) => {
+  if (!floatDrag) return;
+  const container = el("player-container");
+  if (floatDrag.mode === "move") {
+    const width = container.offsetWidth;
+    const height = container.offsetHeight;
+    const left = clamp(floatDrag.startLeft + (e.clientX - floatDrag.startX), 0, Math.max(0, window.innerWidth - width));
+    const top = clamp(floatDrag.startTop + (e.clientY - floatDrag.startY), 0, Math.max(0, window.innerHeight - height));
+    container.style.left = `${left}px`;
+    container.style.top = `${top}px`;
+  } else {
+    const rect = container.getBoundingClientRect();
+    const aspect = currentFloatAspect();
+    // Cap by whichever edge (right or bottom) the box would hit first, so
+    // a tall/narrow video (e.g. a vertically-shot phone recording) can't be
+    // resized past the bottom of the screen just because it still has
+    // horizontal room.
+    const maxWidthByRight = window.innerWidth - rect.left - 8;
+    const maxWidthByBottom = (window.innerHeight - rect.top - 8) * aspect;
+    const width = clamp(floatDrag.startWidth + (e.clientX - floatDrag.startX), 100, Math.min(maxWidthByRight, maxWidthByBottom));
+    container.style.width = `${width}px`;
+    container.style.height = `${width / aspect}px`;
+  }
+  layoutVideoAndSubtitles();
+});
+
+window.addEventListener("resize", () => {
+  if (slotController) layoutVideoAndSubtitles();
+});
+
+// ---------- Screen lock ----------
+
+let lockSwipeStart = null;
+let lastLockIconTap = 0;
+
+el("btn-lock-screen").addEventListener("click", () => {
+  el("lock-overlay").classList.remove("hidden");
+});
+
+function unlockScreen() {
+  el("lock-overlay").classList.add("hidden");
+}
+
+// Primary unlock: swipe up starting from near the bottom-center of the
+// screen. Backup unlock (asked for explicitly, in case the swipe is
+// unreliable or hard to discover): double-tap the lock icon within the
+// overlay -- its own tap also bubbles up to these same listeners, but a
+// plain tap never satisfies the swipe-distance check below, so it's a
+// harmless no-op there.
+el("lock-overlay").addEventListener("pointerdown", (e) => {
+  lockSwipeStart = { x: e.clientX, y: e.clientY };
+});
+el("lock-overlay").addEventListener("pointerup", (e) => {
+  if (!lockSwipeStart) return;
+  const start = lockSwipeStart;
+  lockSwipeStart = null;
+  const startedNearBottomCenter =
+    start.y > window.innerHeight * 0.8 && Math.abs(start.x - window.innerWidth / 2) < window.innerWidth * 0.25;
+  const movedUpFarEnough = start.y - e.clientY > window.innerHeight * 0.15;
+  const stayedRoughlyVertical = Math.abs(e.clientX - start.x) < window.innerWidth * 0.3;
+  if (startedNearBottomCenter && movedUpFarEnough && stayedRoughlyVertical) {
+    unlockScreen();
+  }
+});
+el("lock-overlay").addEventListener("pointercancel", () => {
+  lockSwipeStart = null;
+});
+el("lock-icon").addEventListener("click", () => {
+  const now = Date.now();
+  if (now - lastLockIconTap < 600) unlockScreen();
+  lastLockIconTap = now;
+});
+
+// ---------- Screen off (audio-only) ----------
+
+// Purely a visual toggle -- playback keeps running underneath, so audio
+// keeps playing, but nothing is rendered except one big play/pause button.
+// This is unrelated to (and much simpler than) actually keeping audio
+// playing after leaving the app or locking the phone, which is a genuine
+// OS-level restriction -- see the autopictureinpicture attribute on
+// #local-video-player for the closest real answer to that, which only
+// applies to local/Drive video, not YouTube's embedded iframe.
+el("btn-screen-off").addEventListener("click", () => {
+  el("screen-off-overlay").classList.remove("hidden");
+  render();
+});
+el("screen-off-playpause").addEventListener("click", (e) => {
+  e.stopPropagation(); // don't also trigger the overlay's own tap-to-exit handler below
+  slotController?.togglePlayPause();
+});
+el("screen-off-overlay").addEventListener("click", () => {
+  el("screen-off-overlay").classList.add("hidden");
+});
+
+function endFloatDrag() {
+  if (!floatDrag) return;
+  floatDrag = null;
+  const container = el("player-container");
+  storage.settings.floatBox = {
+    left: parseFloat(container.style.left) || 0,
+    top: parseFloat(container.style.top) || 0,
+    width: parseFloat(container.style.width) || container.offsetWidth,
+  };
+}
+window.addEventListener("pointerup", endFloatDrag);
+window.addEventListener("pointercancel", endFloatDrag);
+
 el("btn-player-back").addEventListener("click", () => {
   destroyPlayer();
   showScreen("search");
@@ -568,11 +809,123 @@ el("btn-prev-slot").addEventListener("click", () => slotController?.channelDown(
 el("btn-next-slot").addEventListener("click", () => slotController?.channelUp());
 el("btn-play-pause").addEventListener("click", () => slotController?.togglePlayPause());
 el("btn-toggle-overlay").addEventListener("click", () => slotController?.toggleOverlay());
-el("resume-pill").addEventListener("click", () => slotController?.channelUp());
+// Draggable/relocatable, remembered across videos -- same idea as the
+// floating video box, but simpler (position only, no resize/aspect ratio).
+// A plain element in our own page (not a cross-origin iframe like YouTube),
+// so it can be dragged directly rather than needing a separate handle.
+let resumeDrag = null;
+let resumePillJustDragged = false;
+
+function applyResumePillPosition() {
+  const pill = el("resume-pill");
+  const pos = storage.settings.resumePillPos;
+  if (!pos) {
+    pill.style.left = "";
+    pill.style.top = "";
+    pill.style.right = "";
+    pill.style.bottom = "";
+    return;
+  }
+  const width = pill.offsetWidth || 120;
+  const height = pill.offsetHeight || 44;
+  pill.style.right = "auto";
+  pill.style.bottom = "auto";
+  pill.style.left = `${clamp(pos.left, 0, Math.max(0, window.innerWidth - width))}px`;
+  pill.style.top = `${clamp(pos.top, 0, Math.max(0, window.innerHeight - height))}px`;
+}
+
+el("resume-pill").addEventListener("pointerdown", (e) => {
+  const rect = el("resume-pill").getBoundingClientRect();
+  resumeDrag = { startX: e.clientX, startY: e.clientY, startLeft: rect.left, startTop: rect.top, moved: false };
+});
+window.addEventListener("pointermove", (e) => {
+  if (!resumeDrag) return;
+  const dx = e.clientX - resumeDrag.startX;
+  const dy = e.clientY - resumeDrag.startY;
+  if (Math.abs(dx) > 6 || Math.abs(dy) > 6) resumeDrag.moved = true;
+  if (!resumeDrag.moved) return;
+  const pill = el("resume-pill");
+  const width = pill.offsetWidth;
+  const height = pill.offsetHeight;
+  pill.style.right = "auto";
+  pill.style.bottom = "auto";
+  pill.style.left = `${clamp(resumeDrag.startLeft + dx, 0, Math.max(0, window.innerWidth - width))}px`;
+  pill.style.top = `${clamp(resumeDrag.startTop + dy, 0, Math.max(0, window.innerHeight - height))}px`;
+});
+window.addEventListener("pointerup", () => {
+  if (!resumeDrag) return;
+  const wasMoved = resumeDrag.moved;
+  resumeDrag = null;
+  if (!wasMoved) return;
+  resumePillJustDragged = true;
+  const pill = el("resume-pill");
+  storage.settings.resumePillPos = { left: parseFloat(pill.style.left), top: parseFloat(pill.style.top) };
+});
+window.addEventListener("pointercancel", () => {
+  resumeDrag = null;
+});
+
+el("resume-pill").addEventListener("click", () => {
+  if (resumePillJustDragged) {
+    resumePillJustDragged = false; // this click is the tail end of a drag, not a tap -- skip the resume action
+    return;
+  }
+  slotController?.channelUp();
+});
+function updateLikedBadge() {
+  const liked = !!state.currentVideo && storage.isFavorite(state.currentVideo.videoId);
+  el("liked-badge").classList.toggle("hidden", !liked);
+}
+
 el("btn-favorite").addEventListener("click", () => {
   if (!state.currentVideo) return;
   storage.toggleFavorite(state.currentVideo);
   el("btn-favorite").textContent = storage.isFavorite(state.currentVideo.videoId) ? "♥" : "♡";
+  updateLikedBadge();
+});
+
+// Draggable/relocatable and remembered across videos, just like the resume
+// pill above -- a plain always-on-top marker, not a button, so it's just
+// dragged directly with no tap action to distinguish from a drag.
+let likedBadgeDrag = null;
+
+function applyLikedBadgePosition() {
+  const badge = el("liked-badge");
+  const pos = storage.settings.likedBadgePos;
+  if (!pos) {
+    badge.style.left = "";
+    badge.style.top = "";
+    badge.style.right = "";
+    return;
+  }
+  const width = badge.offsetWidth || 32;
+  const height = badge.offsetHeight || 32;
+  badge.style.right = "auto";
+  badge.style.left = `${clamp(pos.left, 0, Math.max(0, window.innerWidth - width))}px`;
+  badge.style.top = `${clamp(pos.top, 0, Math.max(0, window.innerHeight - height))}px`;
+}
+
+el("liked-badge").addEventListener("pointerdown", (e) => {
+  const rect = el("liked-badge").getBoundingClientRect();
+  likedBadgeDrag = { startX: e.clientX, startY: e.clientY, startLeft: rect.left, startTop: rect.top };
+});
+window.addEventListener("pointermove", (e) => {
+  if (!likedBadgeDrag) return;
+  const badge = el("liked-badge");
+  const width = badge.offsetWidth;
+  const height = badge.offsetHeight;
+  badge.style.right = "auto";
+  badge.style.left = `${clamp(likedBadgeDrag.startLeft + (e.clientX - likedBadgeDrag.startX), 0, Math.max(0, window.innerWidth - width))}px`;
+  badge.style.top = `${clamp(likedBadgeDrag.startTop + (e.clientY - likedBadgeDrag.startY), 0, Math.max(0, window.innerHeight - height))}px`;
+});
+window.addEventListener("pointerup", () => {
+  if (!likedBadgeDrag) return;
+  likedBadgeDrag = null;
+  const badge = el("liked-badge");
+  storage.settings.likedBadgePos = { left: parseFloat(badge.style.left), top: parseFloat(badge.style.top) };
+});
+window.addEventListener("pointercancel", () => {
+  likedBadgeDrag = null;
 });
 
 // Keyboard shortcuts -- a web-appropriate stand-in for the TV remote's
@@ -616,7 +969,8 @@ function render() {
     subtitleBox.classList.remove("hidden");
     subtitleBox.classList.toggle("pos-top", storage.settings.subtitlePosition === "top");
     subtitleBox.classList.toggle("pos-bottom", storage.settings.subtitlePosition === "bottom");
-    subtitleBox.innerHTML = `<div class="bubble" style="color:${storage.settings.subtitleColor}">${escapeHtml(slotController.currentSubtitleText)}</div>`;
+    const bubbleStyle = `color:${storage.settings.subtitleColor};background-color:${storage.settings.subtitleHighlightColor}`;
+    subtitleBox.innerHTML = `<div class="bubble" style="${bubbleStyle}">${escapeHtml(slotController.currentSubtitleText)}</div>`;
     if (storage.settings.subtitleTwoLines && slotController.nextSubtitleText) {
       subtitleBox.innerHTML += `<div id="subtitle-next" style="color:${storage.settings.subtitleColor}">${escapeHtml(slotController.nextSubtitleText)}</div>`;
     }
@@ -663,6 +1017,8 @@ function render() {
     el("overlay-slot-info").textContent = label + captionNote;
     renderOverlayLiveValues();
   }
+
+  el("screen-off-playpause").textContent = slotController.isPlaying ? "⏸" : "▶";
 }
 
 function renderOverlayLiveValues() {
