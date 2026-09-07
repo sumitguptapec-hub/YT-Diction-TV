@@ -61,6 +61,16 @@ export const settings = {
   set playbackSpeed(v) {
     writeJson("playbackSpeed", v);
   },
+  // Breadcrumb of the last Drive folder browsed (array of {id, name}), so
+  // reopening Drive picks up where you left off instead of always starting
+  // at "My Drive" -- deep folder structures otherwise mean re-navigating
+  // every single time.
+  get driveLastPath() {
+    return readJson("driveLastPath", null);
+  },
+  set driveLastPath(v) {
+    writeJson("driveLastPath", v);
+  },
 };
 
 export function history() {

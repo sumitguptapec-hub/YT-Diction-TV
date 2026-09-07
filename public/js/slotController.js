@@ -126,6 +126,12 @@ export class SlotController {
 
   onPlaybackError(message) {
     console.error("Playback error:", message);
+    // Unlike showHud()'s transient messages (speed changes etc.), an error
+    // means the video is stuck -- leave it on screen until the user backs
+    // out instead of auto-hiding after a couple seconds.
+    clearTimeout(this._hideHudTimer);
+    this.hudText = message;
+    this.onChange();
   }
 
   onSlotConfigChanged() {

@@ -146,7 +146,7 @@ document.querySelectorAll("[data-back]").forEach((btn) => {
 let driveDirStack = [{ id: driveApi.ROOT_FOLDER_ID, name: "My Drive" }];
 
 el("btn-drive").addEventListener("click", async () => {
-  driveDirStack = [{ id: driveApi.ROOT_FOLDER_ID, name: "My Drive" }];
+  driveDirStack = storage.settings.driveLastPath || [{ id: driveApi.ROOT_FOLDER_ID, name: "My Drive" }];
   showScreen("drive");
   let token = getStoredDriveToken();
   if (!token) {
@@ -164,6 +164,7 @@ el("btn-drive").addEventListener("click", async () => {
 el("btn-drive-back").addEventListener("click", () => {
   if (driveDirStack.length > 1) {
     driveDirStack = driveDirStack.slice(0, -1);
+    storage.settings.driveLastPath = driveDirStack;
     loadDriveFolder();
   } else {
     showScreen("search");
@@ -195,6 +196,7 @@ function renderDriveGrid(entries) {
       card.innerHTML = `<div class="meta" style="text-align:center;padding:20px 0;font-size:40px;">📁</div><div class="meta"><div class="title">${escapeHtml(entry.name)}</div></div>`;
       card.addEventListener("click", () => {
         driveDirStack = [...driveDirStack, { id: entry.id, name: entry.name }];
+        storage.settings.driveLastPath = driveDirStack;
         loadDriveFolder();
       });
     } else {
@@ -403,7 +405,18 @@ function playBlobAsVideo(blob, { title, subtitle }) {
   videoEl.addEventListener("timeupdate", () => slotController?.onSecond(videoEl.currentTime));
   videoEl.addEventListener("play", () => slotController?.onStateChange(true));
   videoEl.addEventListener("pause", () => slotController?.onStateChange(false));
-  videoEl.addEventListener("error", () => slotController?.onPlaybackError("video playback error"));
+  videoEl.addEventListener("error", () => {
+    const code = videoEl.error?.code;
+    // Codes 3/4 mean the browser's media decoder rejected the file outright
+    // -- the most common real-world cause is an old MPEG-4 Part 2 (Xvid/
+    // DivX) codec inside the container, which no browser (not just this
+    // app) can decode; only actual H.264/HEVC/VP8/VP9 content plays.
+    const message =
+      code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || code === MediaError.MEDIA_ERR_DECODE
+        ? "This browser can't decode this file's video codec (common with older MPEG-4 Part 2 / DivX / Xvid files). Re-encode it to H.264 (e.g. with the free HandBrake app) and try again."
+        : "Video playback error.";
+    slotController?.onPlaybackError(message);
+  });
 
   slotController.applySpeed(storage.settings.playbackSpeed);
   return slotController;
