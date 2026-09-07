@@ -1,10 +1,13 @@
-import { initAuth, signIn, getStoredToken, clearStoredToken } from "./auth.js";
+import { initAuth, signIn, getStoredToken, clearStoredToken, completeRedirectSignIn } from "./auth.js";
 import { searchYouTube, fetchCues } from "./youtubeApi.js";
 import { SlotController } from "./slotController.js";
+import { parseSrt } from "./srtParser.js";
+import { initDriveAuth, signInToDrive, getStoredDriveToken, completeDriveRedirectSignIn } from "./driveAuth.js";
+import * as driveApi from "./driveApi.js";
 import * as storage from "./storage.js";
 
 const el = (id) => document.getElementById(id);
-const screens = ["signin", "search", "history", "favorites", "settings", "player"];
+const screens = ["signin", "search", "history", "favorites", "settings", "player", "drive"];
 
 const state = {
   accessToken: null,
@@ -16,6 +19,7 @@ const state = {
 let slotController = null;
 let ytPlayer = null;
 let pollTimer = null;
+let localVideoObjectUrl = null;
 
 // Polling instead of relying on window.onYouTubeIframeAPIReady: that global
 // callback races against this being a deferred module script -- on-device
@@ -135,6 +139,93 @@ document.querySelectorAll("[data-back]").forEach((btn) => {
   btn.addEventListener("click", () => showScreen("search"));
 });
 
+// ---------- Drive ----------
+
+// Breadcrumb of picked folders; last = current folder. Starts at "My
+// Drive" -- same idea as the Android app's LocalBrowseScreen dirStack.
+let driveDirStack = [{ id: driveApi.ROOT_FOLDER_ID, name: "My Drive" }];
+
+el("btn-drive").addEventListener("click", async () => {
+  driveDirStack = [{ id: driveApi.ROOT_FOLDER_ID, name: "My Drive" }];
+  showScreen("drive");
+  let token = getStoredDriveToken();
+  if (!token) {
+    el("drive-status").textContent = "Requesting Drive access…";
+    try {
+      token = await signInToDrive();
+    } catch (err) {
+      el("drive-status").textContent = "Drive access failed: " + err.message;
+      return;
+    }
+  }
+  loadDriveFolder();
+});
+
+el("btn-drive-back").addEventListener("click", () => {
+  if (driveDirStack.length > 1) {
+    driveDirStack = driveDirStack.slice(0, -1);
+    loadDriveFolder();
+  } else {
+    showScreen("search");
+  }
+});
+
+async function loadDriveFolder() {
+  const token = getStoredDriveToken();
+  const current = driveDirStack[driveDirStack.length - 1];
+  el("drive-folder-name").textContent = current.name;
+  el("drive-grid").innerHTML = "";
+  el("drive-status").textContent = "Loading…";
+  try {
+    const entries = await driveApi.listEntries(current.id, token);
+    el("drive-status").textContent = entries.length === 0 ? "No videos found in this folder." : "";
+    renderDriveGrid(entries);
+  } catch (err) {
+    el("drive-status").textContent = "Couldn't load Drive folder: " + err.message;
+  }
+}
+
+function renderDriveGrid(entries) {
+  const grid = el("drive-grid");
+  grid.innerHTML = "";
+  for (const entry of entries) {
+    const card = document.createElement("div");
+    card.className = "grid-item";
+    if (entry.type === "folder") {
+      card.innerHTML = `<div class="meta" style="text-align:center;padding:20px 0;font-size:40px;">📁</div><div class="meta"><div class="title">${escapeHtml(entry.name)}</div></div>`;
+      card.addEventListener("click", () => {
+        driveDirStack = [...driveDirStack, { id: entry.id, name: entry.name }];
+        loadDriveFolder();
+      });
+    } else {
+      const icon = entry.srtFileId ? "🎬 CC" : "🎬";
+      card.innerHTML = `<div class="meta" style="text-align:center;padding:20px 0;font-size:32px;">${icon}</div><div class="meta"><div class="title">${escapeHtml(entry.name)}</div></div>`;
+      card.addEventListener("click", () => openDriveVideo(entry));
+    }
+    grid.appendChild(card);
+  }
+}
+
+async function openDriveVideo(entry) {
+  const token = getStoredDriveToken();
+  el("drive-status").textContent = "Loading video…";
+  try {
+    const res = await fetch(driveApi.mediaUrl(entry.id), { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`download failed: ${res.status}`);
+    const blob = await res.blob();
+    el("drive-status").textContent = "";
+    const ctrl = playBlobAsVideo(blob, { title: entry.name, subtitle: "Google Drive" });
+    if (entry.srtFileId) {
+      const srtText = await driveApi.fetchSrtCues(entry.srtFileId, token);
+      ctrl.onCuesLoaded(parseSrt(srtText));
+    } else {
+      ctrl.onCuesLoaded([]);
+    }
+  } catch (err) {
+    el("drive-status").textContent = "Couldn't play video: " + err.message;
+  }
+}
+
 // ---------- Settings ----------
 
 function syncSettingsUi() {
@@ -220,9 +311,13 @@ function openVideo(video) {
   showScreen("player");
   el("overlay-title").textContent = video.title;
   el("overlay-channel").textContent = video.channelTitle;
+  el("btn-favorite").classList.remove("hidden");
   el("btn-favorite").textContent = storage.isFavorite(video.videoId) ? "♥" : "♡";
 
-  destroyPlayer();
+  destroyPlayer(); // replaces both player elements with fresh nodes -- must happen before the visibility toggles below
+
+  el("yt-player").classList.remove("hidden");
+  el("local-video-player").classList.add("hidden");
 
   slotController = new SlotController({
     currentConfig,
@@ -269,6 +364,85 @@ function makePlaybackPort(player) {
   };
 }
 
+// Shared by local-file and Drive playback -- both end up with a Blob to
+// play and an optional cues promise, driven through the same plain <video>
+// element the YouTube path's SlotController abstraction doesn't care is a
+// different backend. No stable identity to key History/Favorites off
+// across sessions for either source, so both skip that, same as the
+// Android app's local-video handling.
+function playBlobAsVideo(blob, { title, subtitle }) {
+  state.currentVideo = null;
+  state.resumePositionSec = 0;
+
+  showScreen("player");
+  el("overlay-title").textContent = title;
+  el("overlay-channel").textContent = subtitle;
+  el("btn-favorite").classList.add("hidden");
+
+  destroyPlayer(); // replaces #local-video-player with a fresh node -- must happen before grabbing videoEl below
+
+  el("yt-player").classList.add("hidden");
+  const videoEl = el("local-video-player");
+  videoEl.classList.remove("hidden");
+
+  slotController = new SlotController({
+    currentConfig,
+    initialPositionSec: 0,
+    onPositionSave: () => {}, // no persistent identity to save against
+    onChange: render,
+  });
+
+  localVideoObjectUrl = URL.createObjectURL(blob);
+  videoEl.src = localVideoObjectUrl;
+  slotController.attachPlayer(makeVideoPlaybackPort(videoEl));
+
+  videoEl.addEventListener("loadedmetadata", () => {
+    slotController?.onDuration(videoEl.duration);
+    videoEl.play();
+  });
+  videoEl.addEventListener("timeupdate", () => slotController?.onSecond(videoEl.currentTime));
+  videoEl.addEventListener("play", () => slotController?.onStateChange(true));
+  videoEl.addEventListener("pause", () => slotController?.onStateChange(false));
+  videoEl.addEventListener("error", () => slotController?.onPlaybackError("video playback error"));
+
+  slotController.applySpeed(storage.settings.playbackSpeed);
+  return slotController;
+}
+
+// A browser can't browse a USB drive/filesystem the way the Android app
+// does, but a plain file picker lets someone choose a video (and its
+// matching .srt) straight from their device -- this is the web-appropriate
+// equivalent.
+function openLocalVideo(videoFile, srtFile) {
+  const ctrl = playBlobAsVideo(videoFile, {
+    title: videoFile.name.replace(/\.[^/.]+$/, ""),
+    subtitle: "Local file",
+  });
+  if (srtFile) {
+    srtFile.text().then((text) => ctrl.onCuesLoaded(parseSrt(text)));
+  } else {
+    ctrl.onCuesLoaded([]);
+  }
+}
+
+function makeVideoPlaybackPort(videoEl) {
+  return {
+    play: () => videoEl.play(),
+    pause: () => videoEl.pause(),
+    seekTo: (seconds) => { videoEl.currentTime = seconds; },
+    setSpeed: (speed) => { videoEl.playbackRate = speed; },
+  };
+}
+
+el("btn-local-video").addEventListener("click", () => el("local-file-input").click());
+el("local-file-input").addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  const videoFile = files.find((f) => f.type.startsWith("video/") || !f.name.toLowerCase().endsWith(".srt"));
+  const srtFile = files.find((f) => f.name.toLowerCase().endsWith(".srt"));
+  if (videoFile) openLocalVideo(videoFile, srtFile);
+  e.target.value = ""; // allow picking the same file again later
+});
+
 function startPolling() {
   stopPolling();
   pollTimer = setInterval(() => {
@@ -292,6 +466,17 @@ function destroyPlayer() {
   }
   slotController = null;
   el("yt-player").outerHTML = '<div id="yt-player"></div>';
+
+  // Reset via outerHTML (not just clearing .src) so any listeners attached
+  // by a previous openLocalVideo() call are dropped along with the old
+  // element, instead of accumulating across repeated local-video plays.
+  const oldVideoEl = el("local-video-player");
+  oldVideoEl.pause();
+  oldVideoEl.outerHTML = '<video id="local-video-player" class="hidden" playsinline></video>';
+  if (localVideoObjectUrl) {
+    URL.revokeObjectURL(localVideoObjectUrl);
+    localVideoObjectUrl = null;
+  }
 }
 
 el("btn-player-back").addEventListener("click", () => {
@@ -368,6 +553,13 @@ function render() {
 
   el("resume-pill").classList.toggle("hidden", slotController.isPlaying);
 
+  const ring = el("progress-ring");
+  ring.classList.toggle("hidden", !slotController.showTimeProgress);
+  if (slotController.showTimeProgress) {
+    const circumference = 113.1; // 2 * PI * r(18), matches the SVG circle's radius
+    el("progress-ring-fill").style.strokeDashoffset = String(circumference * (1 - slotController.timeProgress));
+  }
+
   const timeline = el("timeline");
   if (slotController.showTimeline && slotController.durationSec > 0) {
     timeline.classList.remove("hidden");
@@ -415,12 +607,30 @@ function escapeHtml(s) {
 
 function boot() {
   initAuth();
+  initDriveAuth();
+
+  // Pick up a token left in the URL fragment by the iOS home-screen
+  // redirect-based sign-in (see auth.js/driveAuth.js) before deciding which
+  // screen to show -- on a normal browser these both just see no fragment
+  // and return null immediately.
+  const mainResult = completeRedirectSignIn();
+  const driveResult = completeDriveRedirectSignIn();
+
   const token = getStoredToken();
   if (token) {
     state.accessToken = token;
     showScreen("search");
   } else {
     showScreen("signin");
+    if (mainResult && !mainResult.success) {
+      el("signin-error").textContent = "Sign-in failed: " + mainResult.error;
+    }
+  }
+
+  if (driveResult && driveResult.success && token) {
+    // Returning from the Drive-scope redirect with the token now stored --
+    // reopen Drive browsing, same as if the cloud icon had just succeeded.
+    el("btn-drive").click();
   }
 }
 boot();
