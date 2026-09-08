@@ -2,7 +2,7 @@ import { initAuth, signIn, getStoredToken, clearStoredToken, completeRedirectSig
 import { searchYouTube, fetchCues } from "./youtubeApi.js";
 import { SlotController } from "./slotController.js";
 import { parseSrt } from "./srtParser.js";
-import { initDriveAuth, signInToDrive, getStoredDriveToken, completeDriveRedirectSignIn } from "./driveAuth.js";
+import { initDriveAuth, signInToDrive, getStoredDriveToken, clearStoredDriveToken, completeDriveRedirectSignIn } from "./driveAuth.js";
 import * as driveApi from "./driveApi.js";
 import * as storage from "./storage.js";
 
@@ -89,7 +89,18 @@ el("search-form").addEventListener("submit", async (e) => {
     el("search-status").textContent = results.length === 0 ? `No results for "${query}".` : "";
     renderSearchResults(results);
   } catch (err) {
-    el("search-status").textContent = "Search failed: " + err.message;
+    if (err.status === 401) {
+      // A stale token from before -- expired (localStorage keeps it around
+      // across app restarts, unlike the old sessionStorage behavior) or
+      // revoked externally. Send back to sign-in instead of leaving a
+      // "search failed" error the user can't do anything about.
+      clearStoredToken();
+      state.accessToken = null;
+      showScreen("signin");
+      el("signin-error").textContent = "Your session expired -- please sign in again.";
+    } else {
+      el("search-status").textContent = "Search failed: " + err.message;
+    }
   }
 });
 
@@ -186,7 +197,12 @@ async function loadDriveFolder() {
     el("drive-status").textContent = entries.length === 0 ? "No videos found in this folder." : "";
     renderDriveGrid(entries);
   } catch (err) {
-    el("drive-status").textContent = "Couldn't load Drive folder: " + err.message;
+    if (err.status === 401) {
+      clearStoredDriveToken();
+      el("drive-status").textContent = "Your Drive access expired -- tap ☁ again to re-authorize.";
+    } else {
+      el("drive-status").textContent = "Couldn't load Drive folder: " + err.message;
+    }
   }
 }
 

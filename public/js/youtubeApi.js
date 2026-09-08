@@ -6,7 +6,11 @@ export async function searchYouTube(query, accessToken) {
     "https://www.googleapis.com/youtube/v3/search" +
     `?part=snippet&type=video&maxResults=30&q=${encodeURIComponent(query)}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(`YouTube search failed: ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(`YouTube search failed: ${res.status}`);
+    err.status = res.status; // lets callers tell an expired/revoked token (401) apart from other failures
+    throw err;
+  }
   const data = await res.json();
   const items = data.items || [];
   return items

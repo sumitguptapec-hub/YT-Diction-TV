@@ -2,6 +2,8 @@ import { GOOGLE_CLIENT_ID } from "./config.js";
 
 const DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const DRIVE_TOKEN_STORAGE_KEY = "ytdictationweb.driveAccessToken";
+const DRIVE_TOKEN_EXPIRY_KEY = "ytdictationweb.driveAccessTokenExpiresAt";
+const EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
 // Separate token client from the YouTube one in auth.js, requested lazily
 // the first time Drive browsing is opened rather than bundled into the
@@ -20,6 +22,12 @@ export function initDriveAuth() {
 
 function isStandalone() {
   return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+function storeDriveToken(token, expiresInSec) {
+  localStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, token);
+  const expiresInMs = (Number(expiresInSec) || 3600) * 1000;
+  localStorage.setItem(DRIVE_TOKEN_EXPIRY_KEY, String(Date.now() + expiresInMs - EXPIRY_SAFETY_MARGIN_MS));
 }
 
 // Same iOS "Add to Home Screen" popup limitation as auth.js -- see the
@@ -45,15 +53,29 @@ export function signInToDrive() {
         reject(new Error(`${response.error}: ${response.error_description ?? ""}`));
         return;
       }
-      localStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, response.access_token);
+      storeDriveToken(response.access_token, response.expires_in);
       resolve(response.access_token);
     };
     driveTokenClient.requestAccessToken({ prompt: "" });
   });
 }
 
+// See auth.js's getStoredToken() for why expiry is checked here rather
+// than trusted purely on presence.
 export function getStoredDriveToken() {
-  return localStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
+  const token = localStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
+  if (!token) return null;
+  const expiresAt = Number(localStorage.getItem(DRIVE_TOKEN_EXPIRY_KEY));
+  if (expiresAt && Date.now() >= expiresAt) {
+    clearStoredDriveToken();
+    return null;
+  }
+  return token;
+}
+
+export function clearStoredDriveToken() {
+  localStorage.removeItem(DRIVE_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(DRIVE_TOKEN_EXPIRY_KEY);
 }
 
 // Boot-time counterpart to auth.js's completeRedirectSignIn() -- see that
@@ -66,6 +88,6 @@ export function completeDriveRedirectSignIn() {
   history.replaceState(null, "", window.location.pathname + window.location.search);
   const token = params.get("access_token");
   if (!token) return { success: false, error: params.get("error") || "no token returned" };
-  localStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, token);
+  storeDriveToken(token, params.get("expires_in"));
   return { success: true };
 }

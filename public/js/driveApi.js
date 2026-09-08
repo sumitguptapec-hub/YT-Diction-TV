@@ -11,7 +11,11 @@ export async function listEntries(folderId, accessToken) {
     "https://www.googleapis.com/drive/v3/files" +
     `?q=${encodeURIComponent(query)}&fields=${encodeURIComponent("files(id,name,mimeType)")}&pageSize=1000`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(`Drive list failed: ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(`Drive list failed: ${res.status}`);
+    err.status = res.status; // lets callers tell an expired/revoked token (401) apart from other failures
+    throw err;
+  }
   const data = await res.json();
   const files = data.files ?? [];
 

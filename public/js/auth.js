@@ -2,6 +2,11 @@ import { GOOGLE_CLIENT_ID } from "./config.js";
 
 const YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
 const TOKEN_STORAGE_KEY = "ytdictationweb.accessToken";
+const TOKEN_EXPIRY_KEY = "ytdictationweb.accessTokenExpiresAt";
+
+// Shaved 60s off whatever Google reports, so a token doesn't get treated as
+// valid for a request that's actually going to land right at/after expiry.
+const EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
 let tokenClient = null;
 
@@ -20,6 +25,12 @@ export function initAuth() {
 
 function isStandalone() {
   return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+function storeToken(token, expiresInSec) {
+  localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  const expiresInMs = (Number(expiresInSec) || 3600) * 1000;
+  localStorage.setItem(TOKEN_EXPIRY_KEY, String(Date.now() + expiresInMs - EXPIRY_SAFETY_MARGIN_MS));
 }
 
 // iOS "Add to Home Screen" apps run in a standalone WKWebView that can't
@@ -48,7 +59,7 @@ export function signIn() {
         reject(new Error(response.error));
         return;
       }
-      localStorage.setItem(TOKEN_STORAGE_KEY, response.access_token);
+      storeToken(response.access_token, response.expires_in);
       resolve(response.access_token);
     };
     tokenClient.requestAccessToken({ prompt: "" });
@@ -67,7 +78,7 @@ export function completeRedirectSignIn() {
   history.replaceState(null, "", window.location.pathname + window.location.search);
   const token = params.get("access_token");
   if (!token) return { success: false, error: params.get("error") || "no token returned" };
-  localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  storeToken(token, params.get("expires_in"));
   return { success: true };
 }
 
@@ -75,11 +86,22 @@ export function completeRedirectSignIn() {
 // no refresh token in this browser-only flow. localStorage (rather than
 // sessionStorage) means being closed and reopened -- including force-quit
 // on iOS -- doesn't force a fresh sign-in on its own; only actual token
-// expiry does, roughly once an hour.
+// expiry does. That expiry is checked here (not just left to whatever API
+// call happens to fail first) so a dead token doesn't get treated as a
+// valid sign-in with no explanation -- it used to, since localStorage was
+// added, since nothing was tracking when the token actually goes stale.
 export function getStoredToken() {
-  return localStorage.getItem(TOKEN_STORAGE_KEY);
+  const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+  if (!token) return null;
+  const expiresAt = Number(localStorage.getItem(TOKEN_EXPIRY_KEY));
+  if (expiresAt && Date.now() >= expiresAt) {
+    clearStoredToken();
+    return null;
+  }
+  return token;
 }
 
 export function clearStoredToken() {
   localStorage.removeItem(TOKEN_STORAGE_KEY);
+  localStorage.removeItem(TOKEN_EXPIRY_KEY);
 }
