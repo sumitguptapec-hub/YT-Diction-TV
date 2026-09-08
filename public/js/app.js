@@ -44,6 +44,29 @@ function whenYouTubeApiReady(callback) {
   }, 50);
 }
 
+// Same race as whenYouTubeApiReady, for the same reason -- accounts.google.com/gsi/client
+// is an `async` classic script racing against this deferred module. It matters
+// more here specifically because right after the iOS redirect-based sign-in
+// (see auth.js) brings the page back, the whole page reloads from scratch and
+// competes for network/CPU with everything else loading -- initAuth() calling
+// straight into `google.accounts...` before that script has landed threw
+// ReferenceError, which used to abort the rest of boot() entirely, including
+// the part that actually reads the just-returned token out of the URL. Never
+// gate that on Google's script being ready; only gate the parts that truly
+// need it (tokenClient/driveTokenClient, used by the popup sign-in path).
+function whenGoogleReady(callback) {
+  if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+    callback();
+    return;
+  }
+  const interval = setInterval(() => {
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+      clearInterval(interval);
+      callback();
+    }
+  }, 50);
+}
+
 function showScreen(name) {
   for (const s of screens) el(`screen-${s}`).classList.toggle("hidden", s !== name);
 }
@@ -1059,13 +1082,23 @@ function escapeHtml(s) {
 // ---------- Boot ----------
 
 function boot() {
-  initAuth();
-  initDriveAuth();
+  // Deferred until Google's script has actually loaded -- unlike the code
+  // below, initAuth()/initDriveAuth() genuinely need it (they call straight
+  // into google.accounts.oauth2). Only used for the popup sign-in path on a
+  // normal browser tab; the redirect path below doesn't depend on this at
+  // all, so it's never blocked waiting for it.
+  whenGoogleReady(() => {
+    initAuth();
+    initDriveAuth();
+  });
 
   // Pick up a token left in the URL fragment by the iOS home-screen
   // redirect-based sign-in (see auth.js/driveAuth.js) before deciding which
   // screen to show -- on a normal browser these both just see no fragment
-  // and return null immediately.
+  // and return null immediately. Deliberately runs unconditionally, not
+  // inside whenGoogleReady() above -- it's pure URL/localStorage work with
+  // no dependency on Google's script, and needs to run every single boot
+  // regardless of whether that script has finished loading yet.
   const mainResult = completeRedirectSignIn();
   const driveResult = completeDriveRedirectSignIn();
 
