@@ -20,21 +20,26 @@ export default async function handler(req, res) {
   }
 
   try {
-    const track = await pickTrack(videoId);
+    const { track, availableLangs } = await pickTrack(videoId);
     if (!track) {
-      res.status(200).json({ cues: [] });
+      res.status(200).json({ cues: [], availableLangs });
       return;
     }
     const xmlRes = await fetch(track.baseUrl);
     const xml = await xmlRes.text();
     const cues = parseCues(xml);
     res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
-    res.status(200).json({ cues });
+    res.status(200).json({ cues, availableLangs });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 }
 
+// Returns availableLangs (every language code innertube reported, empty if
+// none at all) alongside the picked track, so the client can tell "this
+// video genuinely has no captions" apart from "it has captions, just not in
+// English or Hindi" apart from "the innertube call itself failed" -- these
+// used to all look identical (an empty cues list) with nothing to go on.
 async function pickTrack(videoId) {
   const body = {
     videoId,
@@ -53,20 +58,21 @@ async function pickTrack(videoId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!playerRes.ok) return null;
+  if (!playerRes.ok) return { track: null, availableLangs: [] };
   const data = await playerRes.json();
   const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
-  if (tracks.length === 0) return null;
+  const availableLangs = tracks.map((t) => t.languageCode);
+  if (tracks.length === 0) return { track: null, availableLangs };
 
   for (const lang of ACCEPTABLE_LANGS) {
     const track = tracks.find((t) => t.languageCode === lang && t.kind !== "asr");
-    if (track) return track;
+    if (track) return { track, availableLangs };
   }
   for (const lang of ACCEPTABLE_LANGS) {
     const track = tracks.find((t) => t.languageCode === lang);
-    if (track) return track;
+    if (track) return { track, availableLangs };
   }
-  return null;
+  return { track: null, availableLangs };
 }
 
 // Innertube-provided baseUrls return YouTube's word-by-word caption format

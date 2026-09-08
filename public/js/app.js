@@ -15,6 +15,7 @@ const state = {
   currentVideo: null, // { videoId, title, channelTitle, thumbnailUrl }
   resumePositionSec: 0,
   floatAspect: 16 / 9,
+  captionAvailableLangs: null, // null = not checked yet; [] = video has no captions at all; [...] = has some, just not en/hi
 };
 
 let slotController = null;
@@ -24,6 +25,7 @@ let localVideoObjectUrl = null;
 let remotePollTimer = null;
 let remoteLastSeenAt = 0;
 let floatDrag = null; // {mode: "move"|"resize", startX, startY, startLeft, startTop, startWidth}
+const summaryCache = new Map(); // videoId -> [{startSec, summary}, ...], avoids re-calling the API on reopen
 
 // Polling instead of relying on window.onYouTubeIframeAPIReady: that global
 // callback races against this being a deferred module script -- on-device
@@ -134,7 +136,10 @@ function renderSearchResults(results) {
     const card = document.createElement("div");
     card.className = "grid-item";
     card.innerHTML = `
-      <img src="${r.thumbnailUrl}" alt="" loading="lazy" />
+      <div class="thumb-wrap">
+        <img src="${r.thumbnailUrl}" alt="" loading="lazy" />
+        ${r.durationText ? `<span class="duration-badge">${escapeHtml(r.durationText)}</span>` : ""}
+      </div>
       <div class="meta">
         <div class="title">${escapeHtml(r.title)}</div>
         <div class="channel">${escapeHtml(r.channelTitle)}</div>
@@ -385,6 +390,7 @@ function openVideo(video) {
   const saved = hist.find((h) => h.videoId === video.videoId);
   state.resumePositionSec = saved?.lastPositionSec ?? 0;
   state.currentVideo = video;
+  state.captionAvailableLangs = null;
   storage.recordHistory({ ...video, watchedAtEpochMs: Date.now(), lastPositionSec: state.resumePositionSec });
 
   showScreen("player");
@@ -437,7 +443,10 @@ function openVideo(video) {
   };
   whenYouTubeApiReady(load);
 
-  fetchCues(video.videoId).then((cues) => slotController.onCuesLoaded(cues));
+  fetchCues(video.videoId).then(({ cues, availableLangs }) => {
+    state.captionAvailableLangs = availableLangs;
+    slotController.onCuesLoaded(cues);
+  });
 }
 
 function makePlaybackPort(player) {
@@ -846,8 +855,91 @@ el("btn-player-back").addEventListener("click", () => {
 });
 el("btn-prev-slot").addEventListener("click", () => slotController?.channelDown());
 el("btn-next-slot").addEventListener("click", () => slotController?.channelUp());
+// The only other way to reach seekRelative() (and the timeline it reveals)
+// is the ArrowLeft/ArrowRight keyboard shortcuts, which don't exist on a
+// touchscreen -- these buttons are the touch-accessible equivalent.
+el("btn-seek-back").addEventListener("click", () => slotController?.seekRelative(-10));
+el("btn-seek-forward").addEventListener("click", () => slotController?.seekRelative(10));
 el("btn-play-pause").addEventListener("click", () => slotController?.togglePlayPause());
 el("btn-toggle-overlay").addEventListener("click", () => slotController?.toggleOverlay());
+
+// ---------- AI Summary ----------
+
+// Groups consecutive cues the same size as a dictation slot (~5 lines), so
+// each summary corresponds to roughly one slot's worth of dialogue.
+function groupCuesForSummary(cues, size) {
+  const groups = [];
+  for (let i = 0; i < cues.length; i += size) {
+    const chunk = cues.slice(i, i + size);
+    groups.push({ startSec: chunk[0].startSec, text: chunk.map((c) => c.text).join(" ") });
+  }
+  return groups;
+}
+
+function renderSummaryList(items) {
+  const list = el("summary-list");
+  list.innerHTML = "";
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "summary-item";
+    row.innerHTML = `<span class="ts">${formatTime(item.startSec)}</span>${escapeHtml(item.summary)}`;
+    row.addEventListener("click", () => {
+      // Reuses the existing relative-seek path (rather than calling the
+      // player directly) so activeSlotIndex/lastKnownSecond/the timeline
+      // stay in sync with where playback actually lands.
+      slotController?.seekRelative(item.startSec - slotController.lastKnownSecond);
+      el("summary-panel").classList.add("hidden");
+    });
+    list.appendChild(row);
+  }
+}
+
+el("btn-summarize").addEventListener("click", async () => {
+  if (!slotController) return;
+  el("summary-panel").classList.remove("hidden");
+  el("summary-list").innerHTML = "";
+
+  if (!slotController.isReady) {
+    el("summary-status").textContent = "Captions are still loading -- try again in a moment.";
+    return;
+  }
+  if (!slotController.hasCaptions) {
+    el("summary-status").textContent = "No captions available on this video to summarize.";
+    return;
+  }
+
+  const videoKey = state.currentVideo?.videoId ?? null;
+  if (videoKey && summaryCache.has(videoKey)) {
+    el("summary-status").textContent = "";
+    renderSummaryList(summaryCache.get(videoKey));
+    return;
+  }
+
+  el("summary-status").textContent = "Summarizing…";
+  const groups = groupCuesForSummary(slotController.lastCues, 5);
+  try {
+    const res = await fetch("/api/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ groups: groups.map((g, i) => ({ index: i, text: g.text })) }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `summarize failed: ${res.status}`);
+    }
+    const data = await res.json();
+    const merged = groups.map((g, i) => ({
+      startSec: g.startSec,
+      summary: data.summaries.find((s) => s.index === i)?.summary || g.text,
+    }));
+    if (videoKey) summaryCache.set(videoKey, merged);
+    el("summary-status").textContent = "";
+    renderSummaryList(merged);
+  } catch (err) {
+    el("summary-status").textContent = "Couldn't generate summary: " + err.message;
+  }
+});
+el("btn-summary-close").addEventListener("click", () => el("summary-panel").classList.add("hidden"));
 // Draggable/relocatable, remembered across videos -- same idea as the
 // floating video box, but simpler (position only, no resize/aspect ratio).
 // A plain element in our own page (not a cross-origin iframe like YouTube),
@@ -1050,9 +1142,14 @@ function render() {
     const label = slotController.isReady
       ? `Slot ${slotController.activeSlotIndex + 1} of ${slotController.slots.length}`
       : "Loading…";
-    const captionNote = slotController.isReady && !slotController.hasCaptions
-      ? ` — no captions, using ${storage.settings.slotSeconds}s pacing`
-      : "";
+    const captionNote =
+      slotController.isReady && !slotController.hasCaptions
+        ? state.currentVideo
+          ? state.captionAvailableLangs && state.captionAvailableLangs.length > 0
+            ? ` — no en/hi captions (found: ${state.captionAvailableLangs.join(", ")}), using ${storage.settings.slotSeconds}s pacing`
+            : ` — this video has no captions at all, using ${storage.settings.slotSeconds}s pacing`
+          : ` — no .srt file, using ${storage.settings.slotSeconds}s pacing`
+        : "";
     el("overlay-slot-info").textContent = label + captionNote;
     renderOverlayLiveValues();
   }

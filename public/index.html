@@ -174,13 +174,24 @@
     </div>
     <div id="player-controls" class="player-controls">
       <button id="btn-player-back" class="icon-btn" title="Back">✕</button>
+      <button id="btn-seek-back" class="icon-btn" title="Back 10s">⏪</button>
       <button id="btn-prev-slot" class="icon-btn" title="Previous slot">⏮</button>
       <button id="btn-play-pause" class="icon-btn" title="Play/Pause">⏯</button>
       <button id="btn-next-slot" class="icon-btn" title="Next slot">⏭</button>
+      <button id="btn-seek-forward" class="icon-btn" title="Forward 10s">⏩</button>
       <button id="btn-toggle-overlay" class="icon-btn" title="Info panel">☰</button>
       <button id="btn-toggle-float" class="icon-btn" title="Move &amp; resize video">⛶</button>
       <button id="btn-lock-screen" class="icon-btn" title="Lock screen">🔒</button>
       <button id="btn-screen-off" class="icon-btn" title="Audio only (screen off)">🌑</button>
+      <button id="btn-summarize" class="icon-btn" title="AI Summary">🧠</button>
+    </div>
+    <div id="summary-panel" class="summary-panel hidden">
+      <div class="summary-header">
+        <div>AI Summary</div>
+        <button id="btn-summary-close" class="icon-btn">✕</button>
+      </div>
+      <div id="summary-status" class="muted"></div>
+      <div id="summary-list"></div>
     </div>
     <div id="screen-off-overlay" class="hidden">
       <button id="screen-off-playpause">▶</button>
