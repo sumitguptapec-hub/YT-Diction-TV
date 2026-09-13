@@ -53,26 +53,47 @@ async function pickTrack(videoId) {
       },
     },
   };
-  const playerRes = await fetch(INNERTUBE_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!playerRes.ok) return { track: null, availableLangs: [] };
-  const data = await playerRes.json();
-  const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
-  const availableLangs = tracks.map((t) => t.languageCode);
-  if (tracks.length === 0) return { track: null, availableLangs };
+  // A generic Node fetch (no User-Agent, no YouTube client headers) gets
+  // treated differently than a real app's request by this reverse-engineered
+  // endpoint -- confirmed by videoId 2BXpDnXPbOs returning zero caption
+  // tracks from this deployment while the exact same request body returned
+  // a real track when sent from a different origin. Adding the headers a
+  // genuine Android app would send is standard practice for this class of
+  // API and costs nothing if it isn't the deciding factor.
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
+    "X-YouTube-Client-Name": "3",
+    "X-YouTube-Client-Version": "20.10.38",
+  };
 
-  for (const lang of ACCEPTABLE_LANGS) {
-    const track = tracks.find((t) => t.languageCode === lang && t.kind !== "asr");
-    if (track) return { track, availableLangs };
+  // Also retry once after a short pause -- Vercel's serverless IPs are
+  // shared across countless apps hitting this same endpoint, so an empty
+  // captionTracks list isn't necessarily permanent for a given video.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(400);
+    const playerRes = await fetch(INNERTUBE_URL, { method: "POST", headers, body: JSON.stringify(body) });
+    if (!playerRes.ok) continue;
+    const data = await playerRes.json();
+    const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+    if (tracks.length === 0) continue;
+
+    const availableLangs = tracks.map((t) => t.languageCode);
+    for (const lang of ACCEPTABLE_LANGS) {
+      const track = tracks.find((t) => t.languageCode === lang && t.kind !== "asr");
+      if (track) return { track, availableLangs };
+    }
+    for (const lang of ACCEPTABLE_LANGS) {
+      const track = tracks.find((t) => t.languageCode === lang);
+      if (track) return { track, availableLangs };
+    }
+    return { track: null, availableLangs };
   }
-  for (const lang of ACCEPTABLE_LANGS) {
-    const track = tracks.find((t) => t.languageCode === lang);
-    if (track) return { track, availableLangs };
-  }
-  return { track: null, availableLangs };
+  return { track: null, availableLangs: [] };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Innertube-provided baseUrls return YouTube's word-by-word caption format
