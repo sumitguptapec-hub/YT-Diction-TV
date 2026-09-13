@@ -1,5 +1,6 @@
 {
   "outputDirectory": "public",
+  "regions": ["bom1"],
   "headers": [
     {
       "source": "/(.*)",
