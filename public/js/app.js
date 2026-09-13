@@ -1168,6 +1168,14 @@ function render() {
           : ` — no .srt file, using ${storage.settings.slotSeconds}s pacing`
         : "";
     el("overlay-slot-info").textContent = label + captionNote;
+    // A full internal-state dump so a single screenshot of this panel
+    // answers "is it actually playing / has time moved / did cues load /
+    // is a subtitle matching right now" all at once, instead of guessing
+    // from what's visible on the video itself.
+    el("overlay-debug").textContent =
+      `playing=${slotController.isPlaying} t=${slotController.lastKnownSecond.toFixed(1)}s ` +
+      `dur=${slotController.durationSec.toFixed(1)}s cues=${slotController.lastCues.length} ` +
+      `sub="${slotController.currentSubtitleText ?? "none"}"`;
     renderOverlayLiveValues();
   }
 
