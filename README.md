@@ -182,3 +182,22 @@ turns out to work at all.
 - **Local/Drive video History and Favorites**: not tracked, same as the
   Android app's local-video handling -- no stable identity to key them off
   across sessions.
+- **YouTube captions are unreliable for most videos** -- `api/captions.js`
+  uses an unofficial, reverse-engineered YouTube endpoint (there's no
+  official API for fetching captions on videos you don't own), and it
+  appears to selectively withhold caption data specifically when called
+  from cloud/datacenter IP ranges like Vercel's -- confirmed by testing
+  identical requests from a non-datacenter origin, which consistently
+  succeeded on videos that failed from the deployed function. Tried and
+  ruled out as fixes: adding real browser/app request headers, retrying,
+  pinning the function to a different region (bom1), and trying every
+  other YouTube client identity (WEB/IOS/TVHTML5/MWEB) -- none changed the
+  outcome. Out of ~9 well-known videos tested directly against the live
+  endpoint, only one consistently returned real captions; the rest
+  (including major, definitely-captioned videos) came back empty. When
+  this happens the app falls back to time-based pacing automatically and
+  says so in the info panel (☰) -- it's not stuck or broken, this video's
+  captions genuinely didn't come through. A real fix would mean routing
+  these requests through a paid proxy/rotating-IP service, which hasn't
+  been done -- accepted as a known limitation for now rather than adding
+  that cost and complexity.
