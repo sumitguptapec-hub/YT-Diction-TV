@@ -434,7 +434,13 @@ function openVideo(video) {
   const load = () => {
     ytPlayer = new YT.Player("yt-player", {
       videoId: video.videoId,
-      playerVars: { controls: 0, iv_load_policy: 3, cc_load_policy: 0, rel: 0, fs: 0, playsinline: 1 },
+      // controls:0/rel:0/modestbranding:1 minimize YouTube's own UI, but the
+      // share icon / "Watch on YouTube" / title overlay the user's actually
+      // seeing is the separate paused-state branding embeds show before
+      // playback ever starts -- no playerVars combination hides that; it
+      // only goes away once the video is genuinely playing (see the
+      // _seekAndPlay fix in slotController.js for why it wasn't).
+      playerVars: { controls: 0, iv_load_policy: 3, cc_load_policy: 0, rel: 0, fs: 0, playsinline: 1, modestbranding: 1 },
       events: {
         onReady: () => {
           slotController.attachPlayer(makePlaybackPort(ytPlayer));

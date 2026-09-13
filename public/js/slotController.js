@@ -158,21 +158,29 @@ export class SlotController {
     this._seekAndPlay(slot.startSec);
   }
 
-  // A known YouTube IFrame Player quirk: calling play() in the same instant
-  // as seekTo() can race and get silently dropped -- give the seek a brief
-  // moment to land before asking to play, with one backup retry.
+  // play() has to run SYNCHRONOUSLY within whatever user gesture triggered
+  // this (a Resume-pill tap, channelUp/Down from a control button) --
+  // deferring it via setTimeout, even briefly, strips the "real user
+  // gesture" flag browsers require to allow autoplay, which silently
+  // re-blocks playback. That used to be the case here: play() was the one
+  // wrapped in setTimeout, so every resume attempt got autoplay-blocked and
+  // the video sat stuck at the seek position forever -- which also
+  // explains subtitles never matching (real caption timestamps almost
+  // never land exactly on the stuck position) and YouTube's own paused/
+  // share/branding overlay never clearing (it only does once playback
+  // actually starts). play() now goes first, synchronously; seekTo()
+  // follows immediately -- seeking isn't gesture-gated, so it's safe to
+  // correct afterward if the known play()/seekTo() race still drops it.
   _seekAndPlay(second) {
     const requestId = ++this._resumeRequestId;
+    this.player?.play();
     this.player?.seekTo(second);
     setTimeout(() => {
-      if (requestId === this._resumeRequestId) this.player?.play();
-    }, 200);
-    setTimeout(() => {
-      if (requestId === this._resumeRequestId && !this.isPlaying) {
+      if (requestId === this._resumeRequestId) {
         this.player?.seekTo(second);
-        this.player?.play();
+        if (!this.isPlaying) this.player?.play();
       }
-    }, 900);
+    }, 300);
     this.onChange();
   }
 
