@@ -94,6 +94,17 @@ el("btn-signin").addEventListener("click", async () => {
   }
 });
 
+// iOS's Home Screen app can sit "resumed" from the background indefinitely
+// without ever making a real network request -- Cache-Control headers only
+// get (re)checked on an actual navigation, which resuming from the
+// background isn't. A cache-busting query string forces a genuine full
+// reload of the page and everything it loads, picking up whatever's
+// actually live on the server right now.
+el("btn-refresh-app").addEventListener("click", () => {
+  slotController?.flushPosition();
+  window.location.href = window.location.origin + window.location.pathname + "?refresh=" + Date.now();
+});
+
 el("btn-signout").addEventListener("click", () => {
   clearStoredToken();
   state.accessToken = null;
