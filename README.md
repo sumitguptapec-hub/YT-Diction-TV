@@ -145,6 +145,24 @@ Then open http://localhost:3000. Sign-in will only work once
 `http://localhost:3000` is added to the OAuth client's authorized origins
 (step 1.6 above).
 
+## AI Summary setup (`api/summarize.js`)
+
+The 🧠 Summary button needs an LLM API key set as an environment variable in
+Vercel (**Settings → Environments → Production → Environment Variables**),
+same place as `REMOTE_TOKEN`. Two options, tried in this order:
+
+1. **`GEMINI_API_KEY`** (recommended -- genuinely free, no billing account
+   needed): get one from [Google AI Studio](https://aistudio.google.com/apikey).
+   This is *not* the same thing as Google Cloud's enterprise Vertex AI
+   product, which requires a GCP billing account and service-account auth --
+   AI Studio's API is the free-tier-friendly one.
+2. **`ANTHROPIC_API_KEY`** (fallback, real pay-per-use cost): from
+   [console.anthropic.com](https://console.anthropic.com). Used automatically
+   if `GEMINI_API_KEY` isn't set.
+
+Either one, added and the project redeployed, is enough for the button to
+work.
+
 ## Google Drive: worth testing here even though Android couldn't
 
 The Android app hit an unresolved, account-level Google OAuth restriction
