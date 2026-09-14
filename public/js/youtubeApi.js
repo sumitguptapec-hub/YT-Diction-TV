@@ -68,11 +68,13 @@ function formatIsoDuration(iso) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// The access token goes in a header, never the query string -- it must not
-// end up in a URL, log or referrer. Passing it at all is what lets the
-// server's caption lookup be an authenticated request: YouTube answers
-// anonymous ones from that datacenter IP with "Sign in to confirm you're
-// not a bot" for many videos.
+// The access token goes in a header, never the query string, regardless --
+// it must not end up in a URL, log or referrer. Forwarding it was tried as
+// a fix for YouTube blocking most caption requests from this deployment's
+// IP with "Sign in to confirm you're not a bot"; a same-video A/B test
+// (real token vs. no token, back to back) showed it makes no reliable
+// difference, so this is kept only because sending it is still correct
+// practice, not because it resolves the block. See README.
 export async function fetchCues(videoId, accessToken) {
   try {
     const res = await fetch(`/api/captions?videoId=${encodeURIComponent(videoId)}`, {
@@ -88,6 +90,19 @@ export async function fetchCues(videoId, accessToken) {
   } catch (err) {
     return { cues: [], availableLangs: [], blockedReason: String(err) };
   }
+}
+
+// Used as the AI Summary fallback when captions aren't available -- title
+// and description come from the same reliable, official videos.list
+// endpoint already used for duration, not the blocked caption endpoint.
+export async function fetchVideoDetails(videoId, accessToken) {
+  const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const item = data.items?.[0];
+  if (!item) return null;
+  return { title: decodeHtml(item.snippet.title), description: item.snippet.description ?? "" };
 }
 
 const decodeEl = typeof document !== "undefined" ? document.createElement("textarea") : null;

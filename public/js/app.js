@@ -1,5 +1,5 @@
 import { initAuth, signIn, getStoredToken, clearStoredToken, completeRedirectSignIn } from "./auth.js";
-import { searchYouTube, fetchCues } from "./youtubeApi.js";
+import { searchYouTube, fetchCues, fetchVideoDetails } from "./youtubeApi.js";
 import { SlotController } from "./slotController.js";
 import { parseSrt } from "./srtParser.js";
 import { initDriveAuth, signInToDrive, getStoredDriveToken, clearStoredDriveToken, completeDriveRedirectSignIn } from "./driveAuth.js";
@@ -27,6 +27,7 @@ let remotePollTimer = null;
 let remoteLastSeenAt = 0;
 let floatDrag = null; // {mode: "move"|"resize", startX, startY, startLeft, startTop, startWidth}
 const summaryCache = new Map(); // videoId -> [{startSec, summary}, ...], avoids re-calling the API on reopen
+const generalSummaryCache = new Map(); // videoId -> summary text, for the title/description fallback
 
 // Polling instead of relying on window.onYouTubeIframeAPIReady: that global
 // callback races against this being a deferred module script -- on-device
@@ -914,29 +915,11 @@ function renderSummaryList(items) {
   }
 }
 
-el("btn-summarize").addEventListener("click", async () => {
-  if (!slotController) return;
-  el("summary-panel").classList.remove("hidden");
-  el("summary-list").innerHTML = "";
-
-  if (!slotController.isReady) {
-    el("summary-status").textContent = "Captions are still loading -- try again in a moment.";
-    return;
-  }
-  if (!slotController.hasCaptions) {
-    el("summary-status").textContent = "No captions available on this video to summarize.";
-    return;
-  }
-
-  const videoKey = state.currentVideo?.videoId ?? null;
-  if (videoKey && summaryCache.has(videoKey)) {
-    el("summary-status").textContent = "";
-    renderSummaryList(summaryCache.get(videoKey));
-    return;
-  }
-
+// Sends any {startSec, text} groups to Claude and renders the result as a
+// clickable, timestamped list -- shared by the real-captions path and the
+// pasted-transcript path below, since both end up with the same shape.
+async function summarizeGroupsAndRender(groups, videoKey) {
   el("summary-status").textContent = "Summarizing…";
-  const groups = groupCuesForSummary(slotController.lastCues, 5);
   try {
     const res = await fetch("/api/summarize", {
       method: "POST",
@@ -954,11 +937,134 @@ el("btn-summarize").addEventListener("click", async () => {
     }));
     if (videoKey) summaryCache.set(videoKey, merged);
     el("summary-status").textContent = "";
+    el("summary-general").classList.add("hidden");
+    el("summary-paste-section").classList.add("hidden");
     renderSummaryList(merged);
   } catch (err) {
     el("summary-status").textContent = "Couldn't generate summary: " + err.message;
   }
+}
+
+// YouTube's real caption endpoint is blocked for most videos from this
+// deployment (see README) -- when that happens, fall back to a general
+// summary from the video's title/description (the reliable, official API,
+// not the blocked one) rather than leaving the button useless.
+async function generateGeneralSummary(videoKey) {
+  if (generalSummaryCache.has(videoKey)) {
+    el("summary-general").textContent = generalSummaryCache.get(videoKey);
+    el("summary-general").classList.remove("hidden");
+    return;
+  }
+  const details = await fetchVideoDetails(videoKey, state.accessToken);
+  if (!details) return;
+  try {
+    const res = await fetch("/api/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        groups: [{ index: 0, text: `Title: ${details.title}\n\nDescription: ${details.description}`.slice(0, 4000) }],
+      }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const summary = data.summaries?.[0]?.summary;
+    if (!summary) return;
+    generalSummaryCache.set(videoKey, summary);
+    el("summary-general").textContent = summary;
+    el("summary-general").classList.remove("hidden");
+  } catch {
+    // silent -- this is a best-effort fallback on top of an already-degraded path
+  }
+}
+
+// Parses a transcript copied from YouTube's own "Show transcript" panel,
+// which the user's own browser can always reach even when our server can't.
+// Handles both the classic two-line-per-cue layout (a bare timestamp line
+// followed by a text line) and a single-line "0:03 text..." layout, in case
+// the copy behavior differs by browser.
+function parsePastedTranscript(text) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const standaloneTime = /^(?:(\d+):)?(\d{1,2}):(\d{2})$/;
+  const inlineTime = /^(?:(\d+):)?(\d{1,2}):(\d{2})\s+(.+)$/;
+  const toSeconds = (h, m, s) => (h ? Number(h) : 0) * 3600 + Number(m) * 60 + Number(s);
+
+  const cues = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const standalone = standaloneTime.exec(line);
+    if (standalone && lines[i + 1] && !standaloneTime.exec(lines[i + 1])) {
+      cues.push({ startSec: toSeconds(standalone[1], standalone[2], standalone[3]), text: lines[i + 1] });
+      i += 1;
+      continue;
+    }
+    const inline = inlineTime.exec(line);
+    if (inline) {
+      cues.push({ startSec: toSeconds(inline[1], inline[2], inline[3]), text: inline[4] });
+      continue;
+    }
+    // No timestamp on this line -- treat as a continuation of the previous cue's text.
+    if (cues.length > 0) cues[cues.length - 1].text += " " + line;
+  }
+  return cues;
+}
+
+el("btn-summarize").addEventListener("click", async () => {
+  if (!slotController) return;
+  el("summary-panel").classList.remove("hidden");
+  el("summary-list").innerHTML = "";
+  el("summary-general").classList.add("hidden");
+  el("summary-paste-section").classList.add("hidden");
+  el("summary-paste-input").value = "";
+
+  if (!slotController.isReady) {
+    el("summary-status").textContent = "Captions are still loading -- try again in a moment.";
+    return;
+  }
+
+  const videoKey = state.currentVideo?.videoId ?? null;
+
+  if (slotController.hasCaptions) {
+    if (videoKey && summaryCache.has(videoKey)) {
+      el("summary-status").textContent = "";
+      renderSummaryList(summaryCache.get(videoKey));
+      return;
+    }
+    await summarizeGroupsAndRender(groupCuesForSummary(slotController.lastCues, 5), videoKey);
+    return;
+  }
+
+  // No real captions -- offer whatever fallback applies. A cached detailed
+  // summary from a previously-pasted transcript takes priority over both.
+  if (videoKey && summaryCache.has(videoKey)) {
+    el("summary-status").textContent = "";
+    renderSummaryList(summaryCache.get(videoKey));
+    return;
+  }
+  el("summary-status").textContent = "No real captions on this video -- generating a general summary…";
+  el("summary-paste-section").classList.remove("hidden");
+  if (videoKey) {
+    await generateGeneralSummary(videoKey);
+    el("summary-status").textContent = "";
+  } else {
+    // Local/Drive video -- no videoId to look up title/description with.
+    el("summary-status").textContent = "No captions loaded for this file.";
+  }
 });
+
+el("btn-summary-from-paste").addEventListener("click", async () => {
+  const text = el("summary-paste-input").value;
+  const cues = parsePastedTranscript(text);
+  if (cues.length === 0) {
+    el("summary-status").textContent = "Couldn't find any timestamped lines in that paste -- check the format.";
+    return;
+  }
+  const videoKey = state.currentVideo?.videoId ?? null;
+  await summarizeGroupsAndRender(groupCuesForSummary(cues, 5), videoKey);
+});
+
 el("btn-summary-close").addEventListener("click", () => el("summary-panel").classList.add("hidden"));
 // Draggable/relocatable, remembered across videos -- same idea as the
 // floating video box, but simpler (position only, no resize/aspect ratio).

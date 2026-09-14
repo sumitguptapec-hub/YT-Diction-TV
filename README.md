@@ -182,21 +182,31 @@ turns out to work at all.
 - **Local/Drive video History and Favorites**: not tracked, same as the
   Android app's local-video handling -- no stable identity to key them off
   across sessions.
-- **YouTube captions -- fixed, but worth understanding why it broke.**
+- **YouTube captions don't reliably work -- accepted, not fixed.**
   `api/captions.js` uses an unofficial, reverse-engineered YouTube endpoint
   (there's no official API for fetching captions on videos you don't own).
-  Called anonymously from Vercel's datacenter IP, YouTube was answering with
-  `playabilityStatus: LOGIN_REQUIRED`, `"Sign in to confirm you're not a
-  bot"` -- confirmed identical across every YouTube client identity tried
-  (ANDROID, ANDROID_VR, IOS, TVHTML5, WEB_EMBEDDED_PLAYER, MWEB), and
-  unaffected by request headers, retries, or region pinning. The actual fix
-  followed from taking that error message at face value: the app already
-  holds the signed-in user's own `youtube.readonly` access token, and was
-  never sending it with the caption request. Forwarding it (as a header,
-  never a query param, only to Google's own domain) turns the lookup into
-  an authenticated request instead of an anonymous one, and YouTube stops
-  blocking it -- confirmed end-to-end against a real video that was fully
-  blocked before, now returning 600+ real cues. If a video still shows no
-  captions after this, the info panel (☰) reports why: no `.srt` (local/
-  Drive), no en/hi track found (with whatever languages *were* found), or a
-  fresh block reason if YouTube's anti-bot logic changes again later.
+  Called from Vercel's datacenter IP, YouTube answers most caption requests
+  with `playabilityStatus: LOGIN_REQUIRED`, `"Sign in to confirm you're not
+  a bot"` -- confirmed identical across every YouTube client identity tried
+  (ANDROID, ANDROID_VR, IOS, TVHTML5, WEB_EMBEDDED_PLAYER, MWEB), unaffected
+  by request headers, retries, or region pinning. Forwarding the signed-in
+  user's own access token looked like a fix in one early test, but a proper
+  same-video A/B comparison (real token vs. no token, back to back) showed
+  no reliable difference -- across 6 real search results spanning three
+  different topics, 0 returned captions. It's kept in the request anyway
+  since sending it is still correct practice, just not a fix. Only one
+  video (an old, extremely high-traffic one) has ever worked consistently
+  through this whole investigation. When it fails the info panel (☰)
+  reports why: no `.srt` (local/Drive), no en/hi track found (with whatever
+  languages *were* found), or the specific block reason.
+
+- **AI Summary fallback for when captions fail.** Since captions are
+  unreliable, the 🧠 Summary button doesn't just give up when they're
+  missing: it automatically generates a general summary from the video's
+  title and description (the official, reliable `videos.list` endpoint --
+  not the blocked one), and offers a "paste transcript" box for the full,
+  detailed, timestamped version. YouTube's own video page has a "Show
+  transcript" panel that works fine in *your* browser (it's only this
+  deployment's server IP that gets blocked) -- copy that, paste it in, and
+  it's parsed and summarized exactly like real captions would be, including
+  tap-to-seek on each entry.

@@ -193,7 +193,17 @@
         <button id="btn-summary-close" class="icon-btn">✕</button>
       </div>
       <div id="summary-status" class="muted"></div>
+      <div id="summary-general" class="summary-general hidden"></div>
       <div id="summary-list"></div>
+      <div id="summary-paste-section" class="summary-paste-section hidden">
+        <p class="muted small">
+          Have a transcript? Open this video on youtube.com -&gt; "...more" under
+          the video -&gt; "Show transcript" -&gt; select all, copy, paste below for a
+          detailed, timestamped summary.
+        </p>
+        <textarea id="summary-paste-input" rows="6" placeholder="Paste the transcript here..."></textarea>
+        <button id="btn-summary-from-paste" class="btn btn-primary">Generate from transcript</button>
+      </div>
     </div>
     <div id="screen-off-overlay" class="hidden">
       <button id="screen-off-playpause">▶</button>
