@@ -25,7 +25,7 @@ export default async function handler(req, res) {
   // bot" for many videos, so pass along the token the user already granted
   // youtube.readonly for: same Google domain it was issued for, used to read
   // exactly what it was granted for.
-  const authHeader = typeof req.headers.authorization === "string" ? req.headers.authorization : null;
+  const authHeader = typeof req.headers?.authorization === "string" ? req.headers.authorization : null;
 
   try {
     const { track, availableLangs, blockedReason } = await pickTrack(videoId, authHeader);
