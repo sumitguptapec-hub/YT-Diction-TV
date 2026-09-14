@@ -16,6 +16,7 @@ const state = {
   resumePositionSec: 0,
   floatAspect: 16 / 9,
   captionAvailableLangs: null, // null = not checked yet; [] = video has no captions at all; [...] = has some, just not en/hi
+  captionBlockedReason: null, // set when YouTube refused the lookup (e.g. bot check) rather than the video lacking captions
 };
 
 let slotController = null;
@@ -461,8 +462,9 @@ function openVideo(video) {
   };
   whenYouTubeApiReady(load);
 
-  fetchCues(video.videoId).then(({ cues, availableLangs }) => {
+  fetchCues(video.videoId, state.accessToken).then(({ cues, availableLangs, blockedReason }) => {
     state.captionAvailableLangs = availableLangs;
+    state.captionBlockedReason = blockedReason;
     slotController.onCuesLoaded(cues);
   });
 }
@@ -1165,7 +1167,9 @@ function render() {
         ? state.currentVideo
           ? state.captionAvailableLangs && state.captionAvailableLangs.length > 0
             ? ` — no en/hi captions (found: ${state.captionAvailableLangs.join(", ")}), using ${storage.settings.slotSeconds}s pacing`
-            : ` — this video has no captions at all, using ${storage.settings.slotSeconds}s pacing`
+            : state.captionBlockedReason
+              ? ` — YouTube blocked the caption lookup ("${state.captionBlockedReason}"), using ${storage.settings.slotSeconds}s pacing`
+              : ` — this video has no captions at all, using ${storage.settings.slotSeconds}s pacing`
           : ` — no .srt file, using ${storage.settings.slotSeconds}s pacing`
         : "";
     el("overlay-slot-info").textContent = label + captionNote;

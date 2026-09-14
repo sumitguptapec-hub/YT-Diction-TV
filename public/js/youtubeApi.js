@@ -68,14 +68,25 @@ function formatIsoDuration(iso) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-export async function fetchCues(videoId) {
+// The access token goes in a header, never the query string -- it must not
+// end up in a URL, log or referrer. Passing it at all is what lets the
+// server's caption lookup be an authenticated request: YouTube answers
+// anonymous ones from that datacenter IP with "Sign in to confirm you're
+// not a bot" for many videos.
+export async function fetchCues(videoId, accessToken) {
   try {
-    const res = await fetch(`/api/captions?videoId=${encodeURIComponent(videoId)}`);
-    if (!res.ok) return { cues: [], availableLangs: [] };
+    const res = await fetch(`/api/captions?videoId=${encodeURIComponent(videoId)}`, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    });
+    if (!res.ok) return { cues: [], availableLangs: [], blockedReason: `HTTP ${res.status}` };
     const data = await res.json();
-    return { cues: data.cues ?? [], availableLangs: data.availableLangs ?? [] };
-  } catch {
-    return { cues: [], availableLangs: [] };
+    return {
+      cues: data.cues ?? [],
+      availableLangs: data.availableLangs ?? [],
+      blockedReason: data.blockedReason ?? null,
+    };
+  } catch (err) {
+    return { cues: [], availableLangs: [], blockedReason: String(err) };
   }
 }
 

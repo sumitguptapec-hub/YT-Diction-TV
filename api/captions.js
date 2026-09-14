@@ -19,10 +19,18 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Forwarded from the browser (header, never a query param -- it must not
+  // land in a URL, log or referrer). YouTube answers anonymous requests from
+  // this deployment's datacenter IP with "Sign in to confirm you're not a
+  // bot" for many videos, so pass along the token the user already granted
+  // youtube.readonly for: same Google domain it was issued for, used to read
+  // exactly what it was granted for.
+  const authHeader = typeof req.headers.authorization === "string" ? req.headers.authorization : null;
+
   try {
-    const { track, availableLangs } = await pickTrack(videoId);
+    const { track, availableLangs, blockedReason } = await pickTrack(videoId, authHeader);
     if (!track) {
-      res.status(200).json({ cues: [], availableLangs });
+      res.status(200).json({ cues: [], availableLangs, blockedReason: blockedReason ?? null });
       return;
     }
     const xmlRes = await fetch(track.baseUrl);
@@ -40,7 +48,7 @@ export default async function handler(req, res) {
 // video genuinely has no captions" apart from "it has captions, just not in
 // English or Hindi" apart from "the innertube call itself failed" -- these
 // used to all look identical (an empty cues list) with nothing to go on.
-async function pickTrack(videoId) {
+async function pickTrack(videoId, authHeader) {
   const body = {
     videoId,
     context: {
@@ -66,15 +74,25 @@ async function pickTrack(videoId) {
     "X-YouTube-Client-Name": "3",
     "X-YouTube-Client-Version": "20.10.38",
   };
+  if (authHeader) {
+    headers["Authorization"] = authHeader;
+    headers["X-Goog-AuthUser"] = "0";
+  }
 
   // Also retry once after a short pause -- Vercel's serverless IPs are
   // shared across countless apps hitting this same endpoint, so an empty
   // captionTracks list isn't necessarily permanent for a given video.
+  let blockedReason = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await sleep(400);
     const playerRes = await fetch(INNERTUBE_URL, { method: "POST", headers, body: JSON.stringify(body) });
     if (!playerRes.ok) continue;
     const data = await playerRes.json();
+    const status = data?.playabilityStatus;
+    // e.g. "Sign in to confirm you're not a bot" -- YouTube refusing this
+    // deployment's datacenter IP rather than the video lacking captions.
+    // Worth telling apart, since they otherwise look identical downstream.
+    if (status && status.status !== "OK") blockedReason = status.reason || status.status;
     const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
     if (tracks.length === 0) continue;
 
@@ -89,7 +107,7 @@ async function pickTrack(videoId) {
     }
     return { track: null, availableLangs };
   }
-  return { track: null, availableLangs: [] };
+  return { track: null, availableLangs: [], blockedReason };
 }
 
 function sleep(ms) {
