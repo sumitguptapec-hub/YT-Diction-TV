@@ -224,7 +224,7 @@ html, body {
   pointer-events: none;
 }
 .subtitle-box.pos-top { top: 6%; }
-.subtitle-box.pos-bottom { bottom: 14%; }
+.subtitle-box.pos-bottom { bottom: max(14%, calc(var(--controls-h, 70px) + 12px)); }
 /* Applied by layoutVideoAndSubtitles() when there's real empty space next
    to the video (e.g. a 16:9 video in a taller-than-16:9 viewport) -- uses
    the full width of that space instead of the narrower 6%-margin overlay
@@ -280,7 +280,7 @@ html, body {
 
 .resume-pill {
   position: absolute;
-  right: 24px; bottom: 90px;
+  right: 24px; bottom: calc(var(--controls-h, 70px) + 20px);
   background: #7fd08a;
   color: #06210a;
   border: none;
@@ -307,7 +307,7 @@ html, body {
 
 .timeline {
   position: absolute;
-  left: 24px; right: 24px; bottom: 90px;
+  left: 24px; right: 24px; bottom: calc(var(--controls-h, 70px) + 20px);
 }
 .timeline-track { height: 6px; background: rgba(255,255,255,0.3); border-radius: 3px; }
 .timeline-fill { height: 100%; background: var(--accent); border-radius: 3px; width: 0%; }
@@ -315,7 +315,7 @@ html, body {
 
 .player-overlay {
   position: absolute;
-  left: 0; right: 0; bottom: 70px;
+  left: 0; right: 0; bottom: var(--controls-h, 70px);
   background: linear-gradient(to top, rgba(12,12,14,0.95), transparent);
   padding: 20px 24px 10px;
 }

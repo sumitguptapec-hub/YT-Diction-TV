@@ -71,6 +71,7 @@ function whenGoogleReady(callback) {
 
 function showScreen(name) {
   for (const s of screens) el(`screen-${s}`).classList.toggle("hidden", s !== name);
+  if (name === "player") updateControlsHeight();
 }
 
 function currentConfig() {
@@ -1203,7 +1204,28 @@ function escapeHtml(s) {
 
 // ---------- Boot ----------
 
+// The timeline, overlay panel, resume pill and bottom-positioned subtitles
+// all sit above the control bar, which changes height as buttons are added
+// or as it wraps to a second row on narrow screens. Hardcoded offsets meant
+// the timeline was rendering *behind* the bar (drawn correctly, just
+// invisible) once it grew to two rows -- so publish the bar's real measured
+// height and let the CSS position against that instead of a guess.
+function updateControlsHeight() {
+  const h = el("player-controls").offsetHeight;
+  if (h > 0) document.documentElement.style.setProperty("--controls-h", `${Math.round(h)}px`);
+}
+
+function trackControlsHeight() {
+  // Measured on every screen change too, not just here: at boot the player
+  // screen is still display:none, so the bar reports a height of 0 and the
+  // CSS fallback would be used instead of its real (possibly two-row) size.
+  updateControlsHeight();
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(updateControlsHeight).observe(el("player-controls"));
+  window.addEventListener("resize", updateControlsHeight);
+}
+
 function boot() {
+  trackControlsHeight();
   // Deferred until Google's script has actually loaded -- unlike the code
   // below, initAuth()/initDriveAuth() genuinely need it (they call straight
   // into google.accounts.oauth2). Only used for the popup sign-in path on a
