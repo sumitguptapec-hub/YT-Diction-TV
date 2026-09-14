@@ -182,23 +182,50 @@ turns out to work at all.
 - **Local/Drive video History and Favorites**: not tracked, same as the
   Android app's local-video handling -- no stable identity to key them off
   across sessions.
-- **YouTube captions don't reliably work -- accepted, not fixed.**
-  `api/captions.js` uses an unofficial, reverse-engineered YouTube endpoint
-  (there's no official API for fetching captions on videos you don't own).
-  Called from Vercel's datacenter IP, YouTube answers most caption requests
-  with `playabilityStatus: LOGIN_REQUIRED`, `"Sign in to confirm you're not
-  a bot"` -- confirmed identical across every YouTube client identity tried
-  (ANDROID, ANDROID_VR, IOS, TVHTML5, WEB_EMBEDDED_PLAYER, MWEB), unaffected
-  by request headers, retries, or region pinning. Forwarding the signed-in
-  user's own access token looked like a fix in one early test, but a proper
-  same-video A/B comparison (real token vs. no token, back to back) showed
-  no reliable difference -- across 6 real search results spanning three
-  different topics, 0 returned captions. It's kept in the request anyway
-  since sending it is still correct practice, just not a fix. Only one
-  video (an old, extremely high-traffic one) has ever worked consistently
-  through this whole investigation. When it fails the info panel (☰)
-  reports why: no `.srt` (local/Drive), no en/hi track found (with whatever
-  languages *were* found), or the specific block reason.
+- **Vercel Framework Preset was silently misconfigured as "Node" instead of
+  "Other" since the project was first created.** This is the single biggest
+  bug found in this whole project, and it wasn't in any of this repo's code
+  -- it was a Vercel dashboard setting. Under "Node", Vercel treats the
+  whole project as one custom Node server (looking for an entry point like
+  `server.js`) and appears to route every `/api/*` request through a
+  degraded request object -- confirmed directly: every deployed function
+  received `req = {query: {...}}` and *nothing else*, no `method`, no
+  `headers`, no `body`, ever. That single fact was the real explanation for
+  three things that looked like separate bugs: `api/summarize.js`'s
+  `req.method !== "POST"` check was unconditionally true (`undefined !==
+  "POST"`), so it rejected every request since the feature was built;
+  `req.body` being permanently `undefined` meant it would have failed even
+  past that; and forwarding the user's access token for captions had no
+  chance of working since `req.headers` never existed. Fixed via
+  `vercel project update --framework other`, confirmed with a real
+  deployment: `/api/summarize` now correctly parses POST bodies and calls
+  the Claude API for real (verified end-to-end, blocked only by an
+  unrelated low-balance error on the Anthropic account, not a bug here).
+  If a future serverless function acts like it's being called with no
+  `req.headers`/`req.method`, check this setting first before assuming a
+  code bug.
+
+- **YouTube captions -- now correctly diagnosed, still not reliable for
+  most videos.** `api/captions.js` uses an unofficial, reverse-engineered
+  YouTube endpoint (there's no official API for fetching captions on videos
+  you don't own). With the Framework Preset bug above now fixed, forwarding
+  the signed-in user's `youtube.readonly` access token *does* genuinely
+  bypass the `"Sign in to confirm you're not a bot"` anonymous-traffic
+  block that Vercel's datacenter IP otherwise triggers for most videos --
+  confirmed with a real token vs. no token, back to back, on 6 real search
+  results across 3 topics: every one stopped being blocked. But the actual
+  caption data still doesn't come through for most of them, and a raw test
+  against the same endpoint with the same token reveals why:
+  `ACCESS_TOKEN_SCOPE_INSUFFICIENT` -- `youtube.readonly` is enough to
+  prove "this is a real authenticated user" (which is all the bot-check
+  cares about) but not enough to authorize this specific internal caption
+  API, which needs a scope only Google's own first-party apps can request.
+  There's no third-party-requestable OAuth scope that resolves this. Only
+  one video (an old, extremely high-traffic one, likely served from a
+  heavily-cached path regardless of caller) has worked consistently through
+  this entire investigation. When captions fail the info panel (☰) reports
+  why: no `.srt` (local/Drive), no en/hi track found (with whatever
+  languages *were* found), or the specific block/scope reason.
 
 - **AI Summary fallback for when captions fail.** Since captions are
   unreliable, the 🧠 Summary button doesn't just give up when they're
@@ -207,6 +234,7 @@ turns out to work at all.
   not the blocked one), and offers a "paste transcript" box for the full,
   detailed, timestamped version. YouTube's own video page has a "Show
   transcript" panel that works fine in *your* browser (it's only this
-  deployment's server IP that gets blocked) -- copy that, paste it in, and
-  it's parsed and summarized exactly like real captions would be, including
-  tap-to-seek on each entry.
+  deployment's server IP that hits the scope wall above) -- copy that,
+  paste it in, and it's parsed and summarized exactly like real captions
+  would, including tap-to-seek on each entry. This path is unaffected by
+  everything above and is the reliable way to get a detailed summary today.

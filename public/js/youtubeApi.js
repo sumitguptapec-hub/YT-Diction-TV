@@ -68,13 +68,14 @@ function formatIsoDuration(iso) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// The access token goes in a header, never the query string, regardless --
-// it must not end up in a URL, log or referrer. Forwarding it was tried as
-// a fix for YouTube blocking most caption requests from this deployment's
-// IP with "Sign in to confirm you're not a bot"; a same-video A/B test
-// (real token vs. no token, back to back) showed it makes no reliable
-// difference, so this is kept only because sending it is still correct
-// practice, not because it resolves the block. See README.
+// The access token goes in a header, never the query string -- it must not
+// end up in a URL, log or referrer. Forwarding it genuinely does bypass
+// YouTube's "Sign in to confirm you're not a bot" block on anonymous
+// requests from this deployment's IP (confirmed via A/B test once a
+// separate Vercel project-config bug that was silently dropping all
+// request headers got fixed) -- but the caption data still usually comes
+// back empty anyway, because youtube.readonly isn't a broad enough scope
+// to authorize YouTube's internal caption API itself. See README.
 export async function fetchCues(videoId, accessToken) {
   try {
     const res = await fetch(`/api/captions?videoId=${encodeURIComponent(videoId)}`, {
