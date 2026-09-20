@@ -245,6 +245,26 @@ turns out to work at all.
   why: no `.srt` (local/Drive), no en/hi track found (with whatever
   languages *were* found), or the specific block/scope reason.
 
+- **Subtitles when the server can't get captions: YouTube's own captions
+  (added 2026-09-20).** A follow-up probe deployed to Vercel tried seven
+  YouTube client identities (ANDROID, ANDROID_VR, IOS, TVHTML5, the two
+  embedded clients, MWEB) on four videos the site had been blocked on: every
+  one was either refused with `LOGIN_REQUIRED` ("Sign in to confirm you're
+  not a bot") or rejected outright, so no server-side variation can fix this
+  -- the whole datacenter range is blocked. A browser can't fetch the
+  captions itself either: every YouTube caption/player endpoint answers a
+  request carrying another site's `Origin` header with `403`. (The Android TV
+  app has no such problem because it makes the request from the TV's own home
+  connection.) So when the cue lookup comes back empty, the player now
+  switches on YouTube's built-in captions instead (`loadModule("captions")`
+  plus `setOption("captions", "track", ...)`, English first, then Hindi).
+  Those load in the viewer's own browser, so subtitles appear for any video
+  that has them, on any device. What's lost compared with our own cues: no
+  line-count pacing (slots fall back to fixed seconds), YouTube styles the
+  text (our colour/position settings don't apply), and the AI Summary still
+  needs the paste-transcript route. Full parity needs the cues themselves, i.e.
+  a fetch from a residential IP -- e.g. a small relay running on a home PC.
+
 - **AI Summary fallback for when captions fail.** Since captions are
   unreliable, the 🧠 Summary button doesn't just give up when they're
   missing: it automatically generates a general summary from the video's

@@ -17,6 +17,7 @@ const state = {
   floatAspect: 16 / 9,
   captionAvailableLangs: null, // null = not checked yet; [] = video has no captions at all; [...] = has some, just not en/hi
   captionBlockedReason: null, // set when YouTube refused the lookup (e.g. bot check) rather than the video lacking captions
+  nativeCaptions: false, // true when our own cue lookup came back empty, so YouTube's own captions are switched on inside the player instead
 };
 
 let slotController = null;
@@ -405,6 +406,7 @@ function openVideo(video) {
   state.resumePositionSec = saved?.lastPositionSec ?? 0;
   state.currentVideo = video;
   state.captionAvailableLangs = null;
+  state.nativeCaptions = false;
   storage.recordHistory({ ...video, watchedAtEpochMs: Date.now(), lastPositionSec: state.resumePositionSec });
 
   showScreen("player");
@@ -450,12 +452,12 @@ function openVideo(video) {
           ytPlayer.seekTo(state.resumePositionSec, true);
           ytPlayer.playVideo();
           slotController.applySpeed(storage.settings.playbackSpeed);
-          try { ytPlayer.unloadModule("captions"); } catch {}
+          syncNativeCaptions();
           startPolling();
         },
         onStateChange: (e) => {
           slotController.onStateChange(e.data === YT.PlayerState.PLAYING);
-          try { ytPlayer.unloadModule("captions"); } catch {}
+          syncNativeCaptions();
         },
         onError: (e) => slotController.onPlaybackError(String(e.data)),
       },
@@ -464,10 +466,46 @@ function openVideo(video) {
   whenYouTubeApiReady(load);
 
   fetchCues(video.videoId, state.accessToken).then(({ cues, availableLangs, blockedReason }) => {
+    if (state.currentVideo?.videoId !== video.videoId) return; // the user has already moved on to another video
     state.captionAvailableLangs = availableLangs;
     state.captionBlockedReason = blockedReason;
     slotController.onCuesLoaded(cues);
+    // No cues of our own (YouTube refuses this site's server for most videos --
+    // see README), so let the player show YouTube's own captions instead.
+    state.nativeCaptions = cues.length === 0;
+    if (ytPlayer) syncNativeCaptions();
   });
+}
+
+// Our own subtitle overlay draws from cues fetched server-side. When those are
+// available, YouTube's built-in captions are switched off so the two never
+// double up (the player shows them regardless of cc_load_policy, so they're
+// unloaded again on every state change). When they aren't, the built-in
+// captions are switched on: unlike the cue lookup, they work from the viewer's
+// own browser and network, so subtitles still appear.
+function syncNativeCaptions() {
+  if (!ytPlayer) return;
+  try {
+    if (state.nativeCaptions) showNativeCaptions();
+    else ytPlayer.unloadModule("captions");
+  } catch {}
+}
+
+function showNativeCaptions() {
+  try {
+    ytPlayer.loadModule("captions");
+    ytPlayer.setOption("captions", "track", { languageCode: "en" });
+    // No English track? Fall back to Hindi, the only other language this app accepts.
+    setTimeout(() => {
+      try {
+        const current = ytPlayer.getOption("captions", "track");
+        const tracks = ytPlayer.getOption("captions", "tracklist") || [];
+        if ((!current || !current.languageCode) && tracks.some((t) => t.languageCode === "hi")) {
+          ytPlayer.setOption("captions", "track", { languageCode: "hi" });
+        }
+      } catch {}
+    }, 1500);
+  } catch {}
 }
 
 function makePlaybackPort(player) {
@@ -1274,7 +1312,7 @@ function render() {
           ? state.captionAvailableLangs && state.captionAvailableLangs.length > 0
             ? ` — no en/hi captions (found: ${state.captionAvailableLangs.join(", ")}), using ${storage.settings.slotSeconds}s pacing`
             : state.captionBlockedReason
-              ? ` — YouTube blocked the caption lookup ("${state.captionBlockedReason}"), using ${storage.settings.slotSeconds}s pacing`
+              ? ` — YouTube blocked the caption lookup ("${state.captionBlockedReason}"), so YouTube's own captions are shown instead; using ${storage.settings.slotSeconds}s pacing`
               : ` — this video has no captions at all, using ${storage.settings.slotSeconds}s pacing`
           : ` — no .srt file, using ${storage.settings.slotSeconds}s pacing`
         : "";
