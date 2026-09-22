@@ -163,29 +163,35 @@ same place as `REMOTE_TOKEN`. Two options, tried in this order:
 Either one, added and the project redeployed, is enough for the button to
 work.
 
-## Google Drive: worth testing here even though Android couldn't
+## Google Drive
 
-The Android app hit an unresolved, account-level Google OAuth restriction
-blocking `drive.readonly` for every client/project it tried (both the old
+Confirmed working, unlike the Android app: the Android app hit an
+unresolved, account-level Google OAuth restriction blocking
+`drive.readonly` for every client/project it tried (both the old
 `GoogleSignInClient` API and the newer `AuthorizationClient` API) -- see the
-support case draft in the parent folder. This web app requests Drive access
-through yet another, completely different mechanism (Google Identity
-Services' browser token-client flow), requested lazily the first time you
-tap the ☁ icon rather than bundled into sign-in. It's genuinely unknown
-whether the same account-level block applies here too -- this hasn't been
-testable from this environment (the OAuth consent popup can't be driven
-through browser automation the way most of the rest of this was verified).
-**Try it on the real deployed site and tell me what happens** -- either it
-works (in which case the block really was specific to Android's native SDKs)
-or it fails with the same "not permitted to request scopes" error (in which
-case it's confirmed universal, useful to add to the support case).
+support case draft in the parent folder, and the TV app now works around it
+with a service account instead. This web app requests Drive access through
+yet another, completely different mechanism (Google Identity Services'
+browser token-client flow), requested lazily the first time you tap the ☁
+icon rather than bundled into sign-in -- and this one was never blocked.
 
-Drive video playback here works by downloading the full file into memory
-before playing (like local file playback) rather than true streaming --
-fine for typical video sizes, but there's no seeking within the video until
-it's fully downloaded, and very large files will be slow to start and
-memory-heavy. Worth revisiting with a proper streaming approach if Drive
-turns out to work at all.
+**Video playback streams through `api/drive-video.js`, added 2026-09** --
+earlier versions downloaded the entire file into memory before playing
+(like local file playback), which for this app's real files (several
+hundred MB to a few GB) looked exactly like a download that never finishes.
+A plain `<video src="...">` can't attach the `Authorization` header Drive's
+API needs, and Drive rejects the obvious alternative of passing the token as
+an `access_token` query parameter (confirmed directly: HTTP 403) -- so the
+real header has to be attached server-side, which means the video's bytes
+have to pass through our own serverless function rather than coming straight
+from Drive to the `<video>` element. That function forwards the browser's
+own Range requests to Drive (which does honor them, returning a proper 206)
+and streams each response straight through without buffering, capped to an
+8&nbsp;MB slice per request regardless of what the browser asked for -- so
+one request never has to stay open for as long as an entire video takes to
+send, and the browser gets real seeking and a fast start on any file size.
+`.srt` subtitle files are still small enough to fetch directly from the
+browser, unchanged.
 
 ## Known limitations vs. the Android app
 

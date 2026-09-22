@@ -271,51 +271,43 @@ function renderDriveGrid(entries) {
   }
 }
 
-// Drive videos have to be downloaded in full before they can play (see
-// README) -- a large file can take a while, and res.blob() gives no
-// feedback during that wait, which looks exactly like a hang. Reading the
-// stream by hand lets the status line show real download progress instead.
-async function fetchBlobWithProgress(url, options, onProgress) {
-  const res = await fetch(url, options);
-  if (!res.ok) throw new Error(`download failed: ${res.status}`);
-  const total = parseInt(res.headers.get("Content-Length") || "0", 10);
-  const reader = res.body.getReader();
-  const chunks = [];
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
-    onProgress(received, total);
-  }
-  return new Blob(chunks);
-}
-
+// Streams straight from the api/drive-video.js proxy instead of downloading
+// the whole file first -- see that file for why a proxy is needed at all (a
+// <video> element can't attach the Authorization header Drive requires, and
+// Drive rejects the token-as-query-param alternative). A quick 1-byte probe
+// first means an expired/invalid Drive token shows a clear message here
+// instead of the <video> element just failing later with a generic "can't
+// decode" error once real playback starts.
 async function openDriveVideo(entry) {
   const token = getStoredDriveToken();
-  el("drive-status").textContent = "Downloading video…";
+  if (!token) {
+    el("drive-status").textContent = "Your Drive access expired -- tap ☁ again to re-authorize.";
+    return;
+  }
+  const src = `/api/drive-video?fileId=${encodeURIComponent(entry.id)}&token=${encodeURIComponent(token)}`;
+
   try {
-    const blob = await fetchBlobWithProgress(
-      driveApi.mediaUrl(entry.id),
-      { headers: { Authorization: `Bearer ${token}` } },
-      (received, total) => {
-        const mb = (received / 1048576).toFixed(1);
-        el("drive-status").textContent = total
-          ? `Downloading video… ${Math.round((received / total) * 100)}% (${mb} MB)`
-          : `Downloading video… ${mb} MB`;
+    const probe = await fetch(src, { headers: { Range: "bytes=0-0" } });
+    if (!probe.ok && probe.status !== 206) {
+      if (probe.status === 401 || probe.status === 403) {
+        clearStoredDriveToken();
+        el("drive-status").textContent = "Your Drive access expired -- tap ☁ again to re-authorize.";
+      } else {
+        el("drive-status").textContent = `Couldn't play video: Drive returned HTTP ${probe.status}.`;
       }
-    );
-    el("drive-status").textContent = "";
-    const ctrl = playBlobAsVideo(blob, { title: entry.name, subtitle: "Google Drive" });
-    if (entry.srtFileId) {
-      const srtText = await driveApi.fetchSrtCues(entry.srtFileId, token);
-      ctrl.onCuesLoaded(parseSrt(srtText));
-    } else {
-      ctrl.onCuesLoaded([]);
+      return;
     }
   } catch (err) {
-    el("drive-status").textContent = "Couldn't play video: " + err.message;
+    el("drive-status").textContent = "Couldn't reach the video: " + err.message;
+    return;
+  }
+
+  const ctrl = playVideoFromSrc(src, { title: entry.name, subtitle: "Google Drive" });
+  if (entry.srtFileId) {
+    const srtText = await driveApi.fetchSrtCues(entry.srtFileId, token).catch(() => "");
+    ctrl.onCuesLoaded(parseSrt(srtText));
+  } else {
+    ctrl.onCuesLoaded([]);
   }
 }
 
@@ -517,13 +509,13 @@ function makePlaybackPort(player) {
   };
 }
 
-// Shared by local-file and Drive playback -- both end up with a Blob to
-// play and an optional cues promise, driven through the same plain <video>
-// element the YouTube path's SlotController abstraction doesn't care is a
-// different backend. No stable identity to key History/Favorites off
-// across sessions for either source, so both skip that, same as the
-// Android app's local-video handling.
-function playBlobAsVideo(blob, { title, subtitle }) {
+// Shared by local-file playback (a Blob, via an object URL) and Drive
+// playback (the api/drive-video.js proxy's URL directly) -- both end up as a
+// src for the same plain <video> element the YouTube path's SlotController
+// abstraction doesn't care is a different backend. No stable identity to key
+// History/Favorites off across sessions for either source, so both skip
+// that, same as the Android app's local-video handling.
+function playVideoFromSrc(src, { title, subtitle }) {
   state.currentVideo = null;
   state.resumePositionSec = 0;
 
@@ -550,8 +542,7 @@ function playBlobAsVideo(blob, { title, subtitle }) {
   });
   startRemotePolling();
 
-  localVideoObjectUrl = URL.createObjectURL(blob);
-  videoEl.src = localVideoObjectUrl;
+  videoEl.src = src;
   slotController.attachPlayer(makeVideoPlaybackPort(videoEl));
 
   videoEl.addEventListener("loadedmetadata", () => {
@@ -580,6 +571,14 @@ function playBlobAsVideo(blob, { title, subtitle }) {
 
   slotController.applySpeed(storage.settings.playbackSpeed);
   return slotController;
+}
+
+// Local-file playback's own entry point into the shared setup above: turns
+// the picked File/Blob into an object URL first (revoked again in
+// destroyPlayer()).
+function playBlobAsVideo(blob, options) {
+  localVideoObjectUrl = URL.createObjectURL(blob);
+  return playVideoFromSrc(localVideoObjectUrl, options);
 }
 
 // A browser can't browse a USB drive/filesystem the way the Android app
