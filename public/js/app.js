@@ -302,7 +302,12 @@ async function openDriveVideo(entry) {
     return;
   }
 
-  const ctrl = playVideoFromSrc(src, { title: entry.name, subtitle: "Google Drive" });
+  const ctrl = playVideoFromSrc(src, {
+    title: entry.name,
+    subtitle: "Google Drive",
+    mimeType: entry.mimeType,
+    fileName: entry.fileName,
+  });
   if (entry.srtFileId) {
     const srtText = await driveApi.fetchSrtCues(entry.srtFileId, token).catch(() => "");
     ctrl.onCuesLoaded(parseSrt(srtText));
@@ -515,7 +520,34 @@ function makePlaybackPort(player) {
 // abstraction doesn't care is a different backend. No stable identity to key
 // History/Favorites off across sessions for either source, so both skip
 // that, same as the Android app's local-video handling.
-function playVideoFromSrc(src, { title, subtitle }) {
+// Safari -- and every browser on iPhone/iPad, since Apple requires all of
+// them to use WebKit's media engine underneath -- has never supported the
+// Matroska container: it refuses an .mkv file outright even when the video
+// and audio inside are plain H.264/AAC, exactly what an .mp4 of the same
+// content would play back fine. For this app's real Drive files (screen-
+// recorded courses, almost always already H.264) that's a far more likely
+// cause of a "can't decode" error than an actually-undecodable codec, so
+// it's worth checking for specifically -- the generic codec message below
+// sends someone off to a slow full re-encode when a near-instant container
+// swap is usually all that's needed. mimeType (Drive-reported, or the local
+// File object's own .type) is checked first since it's authoritative; the
+// filename extension is only a fallback for when that's missing.
+function describeUnplayableVideo({ mimeType, fileName }) {
+  const isMatroska = mimeType === "video/x-matroska" || /\.mkv$/i.test(fileName || "");
+  if (isMatroska) {
+    return (
+      "This browser can't play .mkv files -- Safari and every browser on iPhone/iPad refuse the Matroska " +
+      "container entirely, even when the video inside is ordinary H.264 (desktop Chrome/Firefox usually can " +
+      "play it, so try there if you want to confirm that's what this is). The fix is normally quick: with " +
+      "ffmpeg on a computer, “ffmpeg -i input.mkv -c copy output.mp4” just repacks the same video/audio " +
+      "into an .mp4 in seconds (no re-encode) -- upload that instead. If that command errors, the codec itself " +
+      "needs converting, which HandBrake (free) can do."
+    );
+  }
+  return "This browser can't decode this file's video codec (common with older MPEG-4 Part 2 / DivX / Xvid files). Re-encode it to H.264 (e.g. with the free HandBrake app) and try again.";
+}
+
+function playVideoFromSrc(src, { title, subtitle, mimeType, fileName }) {
   state.currentVideo = null;
   state.resumePositionSec = 0;
 
@@ -558,13 +590,10 @@ function playVideoFromSrc(src, { title, subtitle }) {
   videoEl.addEventListener("pause", () => slotController?.onStateChange(false));
   videoEl.addEventListener("error", () => {
     const code = videoEl.error?.code;
-    // Codes 3/4 mean the browser's media decoder rejected the file outright
-    // -- the most common real-world cause is an old MPEG-4 Part 2 (Xvid/
-    // DivX) codec inside the container, which no browser (not just this
-    // app) can decode; only actual H.264/HEVC/VP8/VP9 content plays.
+    // Codes 3/4 mean the browser's media decoder rejected the file outright.
     const message =
       code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || code === MediaError.MEDIA_ERR_DECODE
-        ? "This browser can't decode this file's video codec (common with older MPEG-4 Part 2 / DivX / Xvid files). Re-encode it to H.264 (e.g. with the free HandBrake app) and try again."
+        ? describeUnplayableVideo({ mimeType, fileName })
         : "Video playback error.";
     slotController?.onPlaybackError(message);
   });
@@ -589,6 +618,8 @@ function openLocalVideo(videoFile, srtFile) {
   const ctrl = playBlobAsVideo(videoFile, {
     title: videoFile.name.replace(/\.[^/.]+$/, ""),
     subtitle: "Local file",
+    mimeType: videoFile.type,
+    fileName: videoFile.name,
   });
   if (srtFile) {
     srtFile.text().then((text) => ctrl.onCuesLoaded(parseSrt(text)));

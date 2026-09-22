@@ -35,6 +35,11 @@ export async function listEntries(folderId, accessToken) {
       type: "video",
       id: f.id,
       name: stem(f.name),
+      // Kept (unlike `name` above, which drops it) so a playback failure can
+      // tell "this container isn't supported here" apart from "this file is
+      // actually broken" -- see describeUnplayableVideo() in app.js.
+      fileName: f.name,
+      mimeType: f.mimeType,
       srtFileId: srtIdByStem.get(stem(f.name).toLowerCase()) ?? null,
     }));
 
