@@ -1,2 +1,7 @@
 .vercel
 .env*
+# Never commit installed packages -- ffmpeg-static's postinstall step downloads
+# a binary matching whatever machine ran `npm install`; Vercel must run its
+# own install (on its Linux build machines) to get the right one, not reuse
+# a Windows dev machine's copy.
+node_modules

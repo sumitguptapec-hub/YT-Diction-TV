@@ -193,6 +193,44 @@ send, and the browser gets real seeking and a fast start on any file size.
 `.srt` subtitle files are still small enough to fetch directly from the
 browser, unchanged.
 
+**`.mkv` files now play automatically too, added 2026-09.** Safari, and
+every browser on iPhone/iPad (Apple requires them all to use Safari's
+engine), refuses the Matroska container outright, even when the video/audio
+inside is ordinary H.264/AAC -- confirmed via search, not assumption. When
+playback fails with that specific error, the app automatically retries once
+through `api/drive-hls-playlist.js` + `api/drive-hls-segment.js`: these
+remux (not re-encode -- `-c copy`, a fast, lossless container swap) the Drive
+file into an HLS stream (a short `.m3u8` playlist of a few-second `.mpegts`
+segments, generated on demand per segment, never stored). Safari plays HLS
+natively; Chrome/Firefox get the same stream via
+[hls.js](https://github.com/video-dev/hls.js), loaded from a CDN only when
+this fallback actually runs. This all happens invisibly -- normal playback
+(`api/drive-video.js`, above) is always tried first and is what plays for
+every non-`.mkv` file, and for `.mkv` files in a browser that already
+supports Matroska (desktop Chrome/Firefox do); the HLS path only engages on
+an actual decode failure.
+
+ffmpeg itself never sees this app's own servers: it's given Drive's URL
+directly (with the access token as a custom request header) and does its
+own HTTP Range-based seeking straight against Drive when asked to start
+partway through a file -- confirmed locally before shipping this by pulling
+three genuinely different frames from three timestamps of the same file,
+each taking about the same few seconds regardless of how far into the file
+it was. Segment length is chosen per file from its own average bitrate
+(`size ÷ duration`, from Drive's own metadata) so segments stay well clear
+of [Vercel's hard 4.5&nbsp;MB function-response
+limit](https://vercel.com/docs/functions/limitations#request-body-size) --
+confirmed against Vercel's current docs directly, since this number is
+easy to find stale/wrong information about, and getting it wrong here
+would mean a working-looking feature that quietly breaks on some files.
+
+The ffmpeg binary itself ships via the `ffmpeg-static` npm package (added
+to `package.json` -- Vercel installs it fresh on its own Linux build
+machines, so a local `npm install` here on Windows never has to match what
+actually deploys). If a Vercel build ever fails specifically on this
+dependency (bundle size or the binary download), that's the first thing to
+suspect; `@ffmpeg-installer/ffmpeg` is a reasonable alternative to try.
+
 ## Known limitations vs. the Android app
 
 - **Remote-control key mapping** (Channel Up/Down, colour buttons, numeric

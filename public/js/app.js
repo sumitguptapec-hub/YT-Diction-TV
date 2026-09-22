@@ -302,11 +302,19 @@ async function openDriveVideo(entry) {
     return;
   }
 
+  // Only .mkv is worth an automatic retry -- that's the one container Safari
+  // (and, since Apple requires it, every iOS browser) refuses outright
+  // regardless of the codec inside, confirmed via search; the api/drive-
+  // hls-*.js pair remuxes it into something that plays everywhere.
+  const fallbackSrc = isMatroskaSource({ mimeType: entry.mimeType, fileName: entry.fileName })
+    ? `/api/drive-hls-playlist?fileId=${encodeURIComponent(entry.id)}&token=${encodeURIComponent(token)}`
+    : null;
   const ctrl = playVideoFromSrc(src, {
     title: entry.name,
     subtitle: "Google Drive",
     mimeType: entry.mimeType,
     fileName: entry.fileName,
+    fallbackSrc,
   });
   if (entry.srtFileId) {
     const srtText = await driveApi.fetchSrtCues(entry.srtFileId, token).catch(() => "");
@@ -532,9 +540,12 @@ function makePlaybackPort(player) {
 // swap is usually all that's needed. mimeType (Drive-reported, or the local
 // File object's own .type) is checked first since it's authoritative; the
 // filename extension is only a fallback for when that's missing.
+function isMatroskaSource({ mimeType, fileName }) {
+  return mimeType === "video/x-matroska" || /\.mkv$/i.test(fileName || "");
+}
+
 function describeUnplayableVideo({ mimeType, fileName }) {
-  const isMatroska = mimeType === "video/x-matroska" || /\.mkv$/i.test(fileName || "");
-  if (isMatroska) {
+  if (isMatroskaSource({ mimeType, fileName })) {
     return (
       "This browser can't play .mkv files -- Safari and every browser on iPhone/iPad refuse the Matroska " +
       "container entirely, even when the video inside is ordinary H.264 (desktop Chrome/Firefox usually can " +
@@ -547,7 +558,39 @@ function describeUnplayableVideo({ mimeType, fileName }) {
   return "This browser can't decode this file's video codec (common with older MPEG-4 Part 2 / DivX / Xvid files). Re-encode it to H.264 (e.g. with the free HandBrake app) and try again.";
 }
 
-function playVideoFromSrc(src, { title, subtitle, mimeType, fileName }) {
+// Lazily attaches HLS playback to videoEl for the auto-convert fallback
+// below -- Safari (desktop and iOS) plays HLS natively, no library needed;
+// Chrome/Firefox need hls.js (loaded from a CDN only when actually needed,
+// not on every page load) to feed it through Media Source Extensions
+// instead. Either way this is the *only* HLS-specific code in the app: once
+// attached, the existing makeVideoPlaybackPort()/timeupdate/loadedmetadata
+// wiring in playVideoFromSrc works unchanged, because both native HLS and
+// hls.js report a normal videoEl.duration and honour plain
+// videoEl.currentTime seeks like any other playable source.
+let hlsInstance = null;
+function destroyHls() {
+  if (hlsInstance) {
+    try { hlsInstance.destroy(); } catch {}
+    hlsInstance = null;
+  }
+}
+async function attachHlsFallback(videoEl, playlistUrl) {
+  if (videoEl.canPlayType("application/vnd.apple.mpegurl")) {
+    videoEl.src = playlistUrl;
+    return;
+  }
+  const { default: Hls } = await import("https://cdn.jsdelivr.net/npm/hls.js@1/+esm");
+  if (!Hls.isSupported()) throw new Error("this browser can't play HLS either");
+  destroyHls();
+  hlsInstance = new Hls();
+  hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
+    if (data.fatal) slotController?.onPlaybackError("Converted-video playback failed: " + data.type);
+  });
+  hlsInstance.loadSource(playlistUrl);
+  hlsInstance.attachMedia(videoEl);
+}
+
+function playVideoFromSrc(src, { title, subtitle, mimeType, fileName, fallbackSrc }) {
   state.currentVideo = null;
   state.resumePositionSec = 0;
 
@@ -588,14 +631,35 @@ function playVideoFromSrc(src, { title, subtitle, mimeType, fileName }) {
   videoEl.addEventListener("timeupdate", () => slotController?.onSecond(videoEl.currentTime));
   videoEl.addEventListener("play", () => slotController?.onStateChange(true));
   videoEl.addEventListener("pause", () => slotController?.onStateChange(false));
+  // Codes 3/4 mean the browser's media decoder rejected the file outright --
+  // for a Drive .mkv (the only real-world case this app hits) that's really
+  // "this browser refuses the container", so the first such failure
+  // automatically retries once through the api/drive-hls-*.js fallback
+  // (on-the-fly remux to HLS -- see those files) instead of just reporting
+  // the error. usedFallback both prevents retrying a second time and picks
+  // the right message if the fallback attempt *also* fails.
+  let usedFallback = false;
   videoEl.addEventListener("error", () => {
     const code = videoEl.error?.code;
-    // Codes 3/4 mean the browser's media decoder rejected the file outright.
-    const message =
-      code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || code === MediaError.MEDIA_ERR_DECODE
-        ? describeUnplayableVideo({ mimeType, fileName })
-        : "Video playback error.";
-    slotController?.onPlaybackError(message);
+    const isUnsupported = code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || code === MediaError.MEDIA_ERR_DECODE;
+    if (!isUnsupported) {
+      slotController?.onPlaybackError("Video playback error.");
+      return;
+    }
+    if (fallbackSrc && !usedFallback) {
+      usedFallback = true;
+      attachHlsFallback(videoEl, fallbackSrc).catch((err) => {
+        slotController?.onPlaybackError(
+          "This file needs converting to play here, and the automatic attempt to do that failed: " + (err?.message || err)
+        );
+      });
+      return;
+    }
+    slotController?.onPlaybackError(
+      usedFallback
+        ? "This file needs converting to play here, and the automatic attempt to do that failed."
+        : describeUnplayableVideo({ mimeType, fileName })
+    );
   });
 
   slotController.applySpeed(storage.settings.playbackSpeed);
@@ -716,6 +780,7 @@ function destroyPlayer() {
     URL.revokeObjectURL(localVideoObjectUrl);
     localVideoObjectUrl = null;
   }
+  destroyHls();
 }
 
 // ---------- Floating video ----------
