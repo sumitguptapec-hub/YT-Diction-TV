@@ -12,7 +12,8 @@ try {
   log("has init: " + (typeof eruda?.init));
   log("has show: " + (typeof eruda?.show));
   eruda.init();
-  eruda.show("console");
+  eruda.show();
+  try { eruda._entryBtn.hide(); log("entryBtn.hide() ok"); } catch (e) { log("entryBtn.hide() failed: " + e); }
   log("eruda.init() + show() ran without throwing");
   console.log("hello from inside eruda's own console panel");
 } catch (err) {
