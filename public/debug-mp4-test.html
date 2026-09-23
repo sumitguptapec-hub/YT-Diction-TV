@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mp4 playback debug (temporary)</title>
+<style>body{background:#111;color:#ddd;font:13px monospace;margin:16px}video{width:640px;height:360px;background:#000}pre{white-space:pre-wrap;max-width:900px}</style>
+<video id="v" playsinline></video>
+<pre id="log"></pre>
+<script type="module">
+const log = (m) => { document.getElementById("log").textContent += m + "\n"; console.log(m); };
+const params = new URLSearchParams(location.search);
+const fileId = params.get("fileId");
+const token = params.get("token");
+const src = `/api/drive-video?fileId=${encodeURIComponent(fileId)}&token=${encodeURIComponent(token)}`;
+log("src = " + src);
+
+const v = document.getElementById("v");
+
+async function probe() {
+  log("--- probe fetch, Range: bytes=0-0 ---");
+  try {
+    const res = await fetch(src, { headers: { Range: "bytes=0-0" } });
+    log(`probe status=${res.status} ok=${res.ok} content-range=${res.headers.get("Content-Range")} content-length=${res.headers.get("Content-Length")} content-type=${res.headers.get("Content-Type")}`);
+  } catch (err) {
+    log("probe threw: " + err);
+  }
+}
+
+v.addEventListener("loadedmetadata", () => log("loadedmetadata: duration=" + v.duration + " videoWidth=" + v.videoWidth));
+v.addEventListener("canplay", () => log("canplay"));
+v.addEventListener("playing", () => log("playing"));
+v.addEventListener("waiting", () => log("waiting (buffering)"));
+v.addEventListener("stalled", () => log("stalled"));
+v.addEventListener("suspend", () => log("suspend"));
+v.addEventListener("error", () => {
+  const e = v.error;
+  log(`ERROR code=${e?.code} message=${e?.message}`);
+});
+
+await probe();
+log("--- now setting video.src to the SAME url ---");
+v.src = src;
+v.play().catch((err) => log("play() rejected: " + err));
+
+setTimeout(() => log("--- 8s checkpoint: readyState=" + v.readyState + " networkState=" + v.networkState + " currentTime=" + v.currentTime), 8000);
+</script>
