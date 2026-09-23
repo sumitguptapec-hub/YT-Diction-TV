@@ -471,7 +471,7 @@ function openVideo(video) {
           slotController.onStateChange(e.data === YT.PlayerState.PLAYING);
           syncNativeCaptions();
         },
-        onError: (e) => slotController.onPlaybackError(String(e.data)),
+        onError: (e) => reportPlaybackError(String(e.data), { source: "youtube", videoId: video.videoId }),
       },
     });
   };
@@ -574,6 +574,33 @@ function describeUnplayableVideo({ mimeType, fileName }) {
 // wiring in playVideoFromSrc works unchanged, because both native HLS and
 // hls.js report a normal videoEl.duration and honour plain
 // videoEl.currentTime seeks like any other playable source.
+// A debugging console that appears directly on the page the moment playback
+// fails -- the point is diagnosing a failure on a phone (an iPhone
+// especially: there's no cable/Mac-free way to open real Safari DevTools for
+// it) from nothing but a screenshot, no extra software or computer needed on
+// the viewer's end. Loaded from a CDN only once an error actually happens,
+// never otherwise, and only the first time -- a second failure just logs
+// more into the console that's already showing.
+let debugConsoleShown = false;
+async function reportPlaybackError(message, context = {}) {
+  console.error("Playback error:", message, context);
+  slotController?.onPlaybackError(message);
+  if (debugConsoleShown) return;
+  debugConsoleShown = true;
+  try {
+    const { default: eruda } = await import("https://cdn.jsdelivr.net/npm/eruda/+esm");
+    eruda.init();
+    eruda.show(); // opens the full panel immediately -- no tap needed on the phone
+    try { eruda._entryBtn.hide(); } catch {} // its floating launcher button would otherwise sit on top of the video too
+    console.log("=== debug console opened automatically after a playback error ===");
+    console.log("userAgent:", navigator.userAgent);
+    console.log("message:", message);
+    console.log("context:", context);
+  } catch (err) {
+    console.error("Couldn't load the debug console:", err);
+  }
+}
+
 let hlsInstance = null;
 function destroyHls() {
   if (hlsInstance) {
@@ -591,7 +618,7 @@ async function attachHlsFallback(videoEl, playlistUrl) {
   destroyHls();
   hlsInstance = new Hls();
   hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
-    if (data.fatal) slotController?.onPlaybackError("Converted-video playback failed: " + data.type);
+    if (data.fatal) reportPlaybackError("Converted-video playback failed: " + data.type, { source: "hls.js", hlsData: data });
   });
   hlsInstance.loadSource(playlistUrl);
   hlsInstance.attachMedia(videoEl);
@@ -628,6 +655,19 @@ function playVideoFromSrc(src, { title, subtitle, mimeType, fileName, fallbackSr
   videoEl.src = src;
   slotController.attachPlayer(makeVideoPlaybackPort(videoEl));
 
+  // A silent stall -- no error event ever fires, the video just never starts
+  // -- is a distinct failure from an explicit one and wouldn't otherwise open
+  // the debug console at all. Cleared the moment real data actually arrives.
+  const stallTimer = setTimeout(() => {
+    if (videoEl.isConnected && videoEl.readyState < 2 && !videoEl.error) {
+      reportPlaybackError("Video didn't start within 15s and the browser never reported an error (a silent stall).", {
+        src: videoEl.currentSrc || videoEl.src, mimeType, fileName, fallbackSrc,
+        networkState: videoEl.networkState, readyState: videoEl.readyState,
+      });
+    }
+  }, 15000);
+  videoEl.addEventListener("loadeddata", () => clearTimeout(stallTimer), { once: true });
+
   videoEl.addEventListener("loadedmetadata", () => {
     slotController?.onDuration(videoEl.duration);
     if (videoEl.videoWidth && videoEl.videoHeight) {
@@ -650,23 +690,34 @@ function playVideoFromSrc(src, { title, subtitle, mimeType, fileName, fallbackSr
   videoEl.addEventListener("error", () => {
     const code = videoEl.error?.code;
     const isUnsupported = code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || code === MediaError.MEDIA_ERR_DECODE;
+    // Everything a screenshot of the auto-opened debug console needs to
+    // diagnose this without the viewer doing anything else.
+    const context = {
+      src: videoEl.currentSrc || videoEl.src,
+      mimeType, fileName, fallbackSrc, usedFallback,
+      errorCode: code, errorMessage: videoEl.error?.message,
+      networkState: videoEl.networkState, readyState: videoEl.readyState,
+    };
     if (!isUnsupported) {
-      slotController?.onPlaybackError("Video playback error.");
+      reportPlaybackError("Video playback error.", context);
       return;
     }
     if (fallbackSrc && !usedFallback) {
       usedFallback = true;
+      console.warn("Playback failed as expected for this container -- trying the automatic HLS fallback.", context);
       attachHlsFallback(videoEl, fallbackSrc).catch((err) => {
-        slotController?.onPlaybackError(
-          "This file needs converting to play here, and the automatic attempt to do that failed: " + (err?.message || err)
+        reportPlaybackError(
+          "This file needs converting to play here, and the automatic attempt to do that failed: " + (err?.message || err),
+          { ...context, fallbackError: String(err) }
         );
       });
       return;
     }
-    slotController?.onPlaybackError(
+    reportPlaybackError(
       usedFallback
         ? "This file needs converting to play here, and the automatic attempt to do that failed."
-        : describeUnplayableVideo({ mimeType, fileName })
+        : describeUnplayableVideo({ mimeType, fileName }),
+      context
     );
   });
 
