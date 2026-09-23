@@ -24,6 +24,11 @@ let slotController = null;
 let ytPlayer = null;
 let pollTimer = null;
 let localVideoObjectUrl = null;
+// Where the player's on-screen back/close button should return to -- "search"
+// for YouTube and local files (nowhere else they could have come from), or
+// "drive" for a video opened from Drive browsing, so leaving it doesn't strand
+// the user back at the search screen when they were browsing a Drive folder.
+let playerReturnScreen = "search";
 let remotePollTimer = null;
 let remoteLastSeenAt = 0;
 let floatDrag = null; // {mode: "move"|"resize", startX, startY, startLeft, startTop, startWidth}
@@ -315,6 +320,7 @@ async function openDriveVideo(entry) {
     mimeType: entry.mimeType,
     fileName: entry.fileName,
     fallbackSrc,
+    returnScreen: "drive",
   });
   if (entry.srtFileId) {
     const srtText = await driveApi.fetchSrtCues(entry.srtFileId, token).catch(() => "");
@@ -406,6 +412,7 @@ function formatSpeed(s) {
 // ---------- Player ----------
 
 function openVideo(video) {
+  playerReturnScreen = "search";
   const hist = storage.history();
   const saved = hist.find((h) => h.videoId === video.videoId);
   state.resumePositionSec = saved?.lastPositionSec ?? 0;
@@ -590,7 +597,8 @@ async function attachHlsFallback(videoEl, playlistUrl) {
   hlsInstance.attachMedia(videoEl);
 }
 
-function playVideoFromSrc(src, { title, subtitle, mimeType, fileName, fallbackSrc }) {
+function playVideoFromSrc(src, { title, subtitle, mimeType, fileName, fallbackSrc, returnScreen }) {
+  playerReturnScreen = returnScreen || "search";
   state.currentVideo = null;
   state.resumePositionSec = 0;
 
@@ -1004,8 +1012,14 @@ window.addEventListener("pointerup", endFloatDrag);
 window.addEventListener("pointercancel", endFloatDrag);
 
 el("btn-player-back").addEventListener("click", () => {
+  const returnTo = playerReturnScreen;
   destroyPlayer();
-  showScreen("search");
+  if (returnTo === "drive") {
+    showScreen("drive");
+    loadDriveFolder(); // driveDirStack is untouched by playback, so this re-loads the same folder, not the root
+  } else {
+    showScreen("search");
+  }
 });
 el("btn-prev-slot").addEventListener("click", () => slotController?.channelDown());
 el("btn-next-slot").addEventListener("click", () => slotController?.channelUp());

@@ -65,6 +65,11 @@ export default async function handler(req, res) {
 
   res.status(driveRes.status); // normally 206; Drive answers a plain (Range-less, see parseRange below) request with 200
   res.setHeader("Accept-Ranges", "bytes"); // Drive doesn't send this itself, but every response from here on is Range-servable
+  // A stable ETag (constant for a given file, since Drive's content for a
+  // fixed fileId doesn't change mid-playback) -- Safari's media engine is
+  // known to be stricter than Chromium/Firefox about validating Range
+  // responses against one, and behaves better with one present than absent.
+  res.setHeader("ETag", `"drive-${fileId}"`);
   res.setHeader("Cache-Control", "private, max-age=3600");
   for (const h of ["Content-Type", "Content-Length", "Content-Range"]) {
     const v = driveRes.headers.get(h);
